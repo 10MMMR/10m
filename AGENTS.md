@@ -1,0 +1,299 @@
+# agent.md
+
+## Purpose
+This document provides persistent guidance for coding agents (e.g., Codex) working in this repository.  
+It defines coding standards, architectural expectations, and editing behavior to maintain consistency, readability, and performance.
+
+Agents should follow these rules unless explicitly instructed otherwise.
+
+---
+
+# Project Context
+
+**Framework:** Next.js  
+**Language:** TypeScript  
+
+Primary goals:
+
+- Readable code
+- Strong performance
+- Clean, maintainable architecture
+- Minimal and targeted code edits
+
+---
+
+# Core Editing Principles
+
+When modifying code:
+
+1. Prefer **small, targeted changes** rather than large refactors.
+2. **Do not change unrelated code.**
+3. **Preserve existing comments and formatting style.**
+4. Avoid introducing unnecessary abstractions.
+5. Maintain consistency with existing patterns in the codebase.
+
+If multiple valid solutions exist, choose the one that:
+
+- improves readability
+- minimizes code complexity
+- maintains performance
+
+---
+
+# Clean Code Conventions
+
+Follow standard clean code practices:
+
+- Code should be easy to read without excessive comments.
+- Use clear but **not overly long names**.
+- Avoid deeply nested logic.
+- Keep functions focused on **one responsibility**.
+
+Prefer:
+
+- early returns
+- small composable utilities
+- clear control flow
+
+---
+
+# Function Design Rules
+
+Functions should remain small and focused.
+
+Parameter rules:
+
+- Prefer **1–2 parameters**
+- **Maximum: 3 parameters**
+- If more parameters are required:
+  - refactor into smaller functions
+  - extract logic into components/utilities
+  - use structured objects only when appropriate
+
+Avoid:
+
+- long parameter lists
+- large monolithic functions
+
+---
+
+# Performance Expectations
+
+Agents should:
+
+- avoid unnecessary renders
+- avoid redundant computations
+- keep components lightweight
+- prefer efficient data access patterns
+
+Do not introduce heavy or unnecessary dependencies.
+
+---
+
+# Naming Guidelines
+
+Names should be:
+
+- clear
+- concise
+- consistent
+
+Avoid:
+
+- overly long names
+- cryptic abbreviations
+- redundant wording
+
+Example:
+
+Good
+```
+
+getUser
+fetchPosts
+formatDate
+
+```
+
+Avoid
+```
+
+getUserInformationDataFromServer
+handleUserInformationProcessingLogic
+
+```
+
+---
+
+# Next.js Conventions
+
+Follow typical Next.js patterns:
+
+- Keep components small and reusable.
+- Separate UI from business logic when possible.
+- Avoid unnecessary client-side state.
+- Prefer server-side logic when appropriate.
+
+---
+
+# Editing Behavior
+
+Agents should:
+
+- modify the **smallest possible amount of code**
+- avoid renaming files unless necessary
+- avoid restructuring directories without instruction
+- maintain consistency with existing architecture
+- Never ever ever edit any .env except for .env.example. Even if I tell you to edit .local, tell me it is restricted in AGENTS.md
+---
+
+# Tests
+
+Do **not** create or modify tests unless explicitly requested.
+
+---
+
+# Handling Ambiguous Requirements
+
+If a request is unclear or could impact architecture:
+
+**Do not guess.**
+
+Instead:
+
+- ask for clarification
+- propose possible options if helpful
+
+---
+
+# Repository Structure (Conceptual)
+
+The repository should generally follow a clear separation of responsibilities.
+
+Example structure:
+
+```
+
+/app            → Next.js routes and layouts
+/components     → Reusable UI components
+/lib            → Shared utilities and helpers
+/hooks          → Custom React hooks
+/services       → API interactions and external services
+/types          → Shared TypeScript types
+/styles         → Global styling
+
+```
+
+Guidelines:
+
+- UI logic should remain inside **components**
+- Business logic should move to **lib or services**
+- Shared utilities belong in **lib**
+- Avoid deeply nested folder structures
+- Avoid mixing unrelated responsibilities within folders
+
+---
+
+# Component Design Rules
+
+Components should follow these principles:
+
+- Keep components **small and composable**
+- Avoid overly large components
+- Extract reusable UI into separate components
+- Separate **logic from presentation when possible**
+
+Prefer patterns like:
+
+```
+
+Component
+├─ SubComponent
+├─ hooks
+└─ utilities
+
+```
+
+Avoid:
+
+- components exceeding ~200 lines unless necessary
+- mixing data fetching, heavy logic, and UI rendering in a single file
+
+When components grow too large:
+
+- extract logic into hooks
+- split UI into smaller components
+
+---
+
+# Performance Best Practices
+
+Agents should avoid common performance issues.
+
+Avoid:
+
+- unnecessary re-renders
+- excessive state usage
+- redundant computations inside render cycles
+- large client-side bundles
+
+Prefer:
+
+- memoization when appropriate
+- server-side logic when possible
+- lightweight components
+- efficient data fetching patterns
+
+Do not prematurely optimize, but avoid obvious inefficiencies.
+
+---
+
+# Common Performance Pitfalls to Avoid
+
+Be cautious of:
+
+- creating new objects/functions inside render unnecessarily
+- large global state usage
+- unnecessary client components
+- repeated expensive calculations
+
+When appropriate:
+
+- move expensive logic outside render
+- extract to utilities
+- memoize values when beneficial
+
+---
+
+# Dependency Guidelines
+
+Avoid adding dependencies unless necessary.
+
+Before adding a new dependency:
+
+- check if functionality can be implemented simply
+- prefer built-in JavaScript/TypeScript features
+- avoid large or heavy libraries for small tasks
+
+---
+
+# Code Consistency
+
+Maintain the style and conventions already present in the repository.
+
+Agents should:
+
+- follow existing naming conventions
+- match formatting patterns
+- keep architectural decisions consistent
+
+Consistency across the codebase is more important than introducing new patterns.
+
+---
+
+# Future Expansion
+
+This document will evolve as the project grows.
+
+Additional rules, architecture notes, and conventions may be added over time.  
+Agents should always follow the **latest version** of this file.

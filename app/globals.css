@@ -1,0 +1,149 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Sans Forgetica";
+  src:
+    local("Sans Forgetica"),
+    url("/fonts/SansForgetica-Regular.otf") format("opentype"),
+    url("/fonts/SansForgetica-Regular.woff2") format("woff2"),
+    url("/fonts/SansForgetica-Regular.woff") format("woff");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --background: #fdfcf8;
+  --foreground: #2c2c24;
+  --muted: #f0ebe5;
+  --muted-foreground: #78786c;
+  --accent: #5d7052;
+  --accent-secondary: #c18c5d;
+  --accent-foreground: #f3f4f1;
+  --border: #ded8cf;
+  --card: #fefefa;
+  --ring: #5d7052;
+
+  --main: var(--accent);
+  --main-deep: #44523b;
+  --secondary: var(--accent-secondary);
+  --secondary-deep: #a97549;
+  --secondary-strong: #94653e;
+  --text-main: var(--foreground);
+  --text-body: #3a3a31;
+  --text-muted: var(--muted-foreground);
+  --text-contrast: var(--accent-foreground);
+  --text-secondary: #6e4e30;
+  --surface-editor: var(--background);
+  --surface-base: var(--card);
+  --surface-panel: rgba(254, 254, 250, 0.62);
+  --surface-panel-strong: rgba(254, 254, 250, 0.72);
+  --surface-panel-soft: rgba(254, 254, 250, 0.42);
+  --surface-topbar: rgba(250, 247, 240, 0.82);
+  --surface-tab-row: rgba(250, 247, 240, 0.72);
+  --surface-toolbar: rgba(254, 254, 250, 0.58);
+  --surface-toolbar-float: rgba(252, 250, 246, 0.74);
+  --surface-editor-card: rgba(255, 255, 252, 0.68);
+  --surface-input: rgba(253, 252, 248, 0.96);
+  --surface-main-soft: rgba(93, 112, 82, 0.14);
+  --surface-main-faint: rgba(93, 112, 82, 0.1);
+  --surface-main-xfaint: rgba(93, 112, 82, 0.08);
+  --surface-accent-soft: rgba(193, 140, 93, 0.14);
+  --surface-user-soft: rgba(193, 140, 93, 0.22);
+  --surface-table-head: rgba(93, 112, 82, 0.06);
+  --border-soft: rgba(93, 112, 82, 0.2);
+  --border-strong: rgba(93, 112, 82, 0.3);
+  --border-subtle: rgba(93, 112, 82, 0.12);
+  --border-faint: rgba(93, 112, 82, 0.08);
+  --border-floating: rgba(93, 112, 82, 0.24);
+  --border-accent: rgba(193, 140, 93, 0.4);
+  --shadow-main: 0 20px 25px rgba(44, 44, 36, 0.1);
+  --shadow-brand: 0 4px 14px rgba(93, 112, 82, 0.25);
+  --shadow-accent: 0 4px 14px rgba(93, 112, 82, 0.25);
+  --shadow-accent-strong: 0 8px 24px rgba(193, 140, 93, 0.35);
+  --shadow-floating: 0 10px 22px rgba(44, 44, 36, 0.14);
+  --shadow-editor-card: 0 22px 44px rgba(44, 44, 36, 0.12);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--foreground);
+  background: var(--background);
+  font-family:
+    var(--font-geist-sans),
+    "Segoe UI",
+    "Helvetica Neue",
+    system-ui,
+    sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.workspace-shell {
+  height: 100dvh;
+  overflow: hidden;
+  color: var(--text-main);
+  background: var(--background);
+  font-family: "Inter", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+}
+
+.workspace-shell h1,
+.workspace-shell h2 {
+  font-family: "Calistoga", Georgia, serif;
+  letter-spacing: -0.02em;
+}
+
+.mono-label {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@keyframes lock-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

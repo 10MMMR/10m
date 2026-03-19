@@ -5,10 +5,10 @@ import { ChevronRightIcon } from "@heroicons/react/24/outline";
 import type { ExplorerItem, ExplorerItemType } from "../_lib/workspace-data";
 
 function itemDotColor(type: ExplorerItemType) {
-  if (type === "semester") return "bg-[var(--secondary)]";
-  if (type === "course") return "bg-[var(--main)]";
-  if (type === "unit") return "bg-[var(--secondary-strong)]";
-  return "bg-[var(--text-muted)]";
+  if (type === "semester") return "bg-(--secondary)";
+  if (type === "course") return "bg-(--main)";
+  if (type === "unit") return "bg-(--secondary-strong)";
+  return "bg-(--text-muted)";
 }
 
 function depthValue(type: ExplorerItemType) {
@@ -87,15 +87,15 @@ export function LeftPane({ locked, explorerItems, sessions }: LeftPaneProps) {
 
   return (
     <aside
-      className={`flex min-h-0 flex-col overflow-hidden border-b border-[var(--border-soft)] bg-[var(--surface-panel)] backdrop-blur-[20px] lg:border-r lg:border-b-0 ${
+      className={`flex min-h-0 flex-col overflow-hidden border-b border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:border-r lg:border-b-0 ${
         locked
           ? "pointer-events-none select-none opacity-[0.55] grayscale-[0.85] saturate-[0.7]"
           : ""
       }`}
     >
       <section className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-3 border-b border-[var(--border-soft)] p-3">
-          <div className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--surface-main-soft)] text-[13px] font-bold text-[var(--main)]">
+        <div className="flex items-center gap-3 border-b border-(--border-soft) p-3">
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-(--surface-main-soft) text-[13px] font-bold text-(--main)">
             T
           </div>
           <div>
@@ -103,7 +103,7 @@ export function LeftPane({ locked, explorerItems, sessions }: LeftPaneProps) {
           </div>
         </div>
 
-        <div className="relative min-h-0 flex-1 overflow-auto px-[10px] pt-3 pb-[18px]">
+        <div className="relative min-h-0 flex-1 overflow-auto px-2.5 pt-3 pb-[18px]">
           {explorerItems.map((item, index) => {
             if (!visibleItem(index)) return null;
 
@@ -113,21 +113,21 @@ export function LeftPane({ locked, explorerItems, sessions }: LeftPaneProps) {
             return (
               <div
                 key={`${item.type}-${item.title}-${index}`}
-                className={`relative flex items-center gap-2.5 rounded-none px-3 py-2.5 text-[var(--text-muted)] transition-colors duration-150 ${
-                  checked ? "bg-[var(--surface-main-faint)] text-[var(--text-main)]" : ""
+                className={`relative flex items-center gap-2.5 rounded-none px-3 py-2.5 text-(--text-muted) transition-colors duration-150 ${
+                  checked ? "bg-(--surface-main-faint) text-(--text-main)" : ""
                 } ${depthPadding(item.type)}`}
               >
                 {checked ? (
                   <span
-                    className="pointer-events-none absolute top-0 bottom-0 left-0 w-[3px] bg-[var(--main)]"
+                    className="pointer-events-none absolute top-0 bottom-0 left-0 w-[3px] bg-(--main)"
                     aria-hidden="true"
                   />
                 ) : null}
-                <div className="flex min-w-0 items-center gap-2.5 text-[14px]">
+                <div className="flex min-w-0 items-center gap-2.5 text-sm">
                   {folder ? (
                     <button
                       aria-label={openState[index] ? "Collapse folder" : "Expand folder"}
-                      className="w-[14px] flex-none border-0 bg-transparent p-0 text-[var(--text-muted)]"
+                      className="w-3.5 flex-none border-0 bg-transparent p-0 text-(--text-muted)"
                       onClick={() =>
                         setOpenState((current) => {
                           const next = [...current];
@@ -145,7 +145,7 @@ export function LeftPane({ locked, explorerItems, sessions }: LeftPaneProps) {
                       />
                     </button>
                   ) : (
-                    <span className="w-[14px] flex-none" aria-hidden="true" />
+                    <span className="w-3.5 flex-none" aria-hidden="true" />
                   )}
 
                   <button
@@ -183,10 +183,10 @@ export function LeftPane({ locked, explorerItems, sessions }: LeftPaneProps) {
         </div>
       </section>
 
-      <section className="flex min-h-[180px] flex-[0_0_36%] flex-col border-t border-[var(--border-soft)] bg-[var(--surface-panel-soft)]">
-        <div className="mono-label flex items-center justify-between border-b border-[var(--border-faint)] px-5 py-4 text-[11px] font-medium uppercase tracking-[0.15em] text-[var(--text-muted)]">
+      <section className="flex min-h-[180px] flex-[0_0_36%] flex-col border-t border-(--border-soft) bg-(--surface-panel-soft)">
+        <div className="mono-label flex items-center justify-between border-b border-(--border-faint) px-5 py-4 text-[11px] font-medium uppercase tracking-[0.15em] text-(--text-muted)">
           <span>Active sessions</span>
-          <span className="inline-grid h-[26px] w-[26px] place-items-center rounded-full bg-[var(--surface-main-soft)] text-[12px] text-[var(--main)]">
+          <span className="inline-grid h-[26px] w-[26px] place-items-center rounded-full bg-(--surface-main-soft) text-[12px] text-(--main)">
             {sessions.length}
           </span>
         </div>
@@ -194,11 +194,11 @@ export function LeftPane({ locked, explorerItems, sessions }: LeftPaneProps) {
           {sessions.map((session) => (
             <button
               key={session}
-              className="mb-1.5 flex h-11 w-full items-center gap-2.5 rounded-xl border-0 bg-transparent px-3 py-2.5 text-left text-[13px] text-[var(--text-muted)] transition-all duration-200 hover:bg-[var(--surface-panel-strong)] hover:text-[var(--text-main)]"
+              className="mb-1.5 flex h-11 w-full items-center gap-2.5 rounded-xl border-0 bg-transparent px-3 py-2.5 text-left text-[13px] text-(--text-muted) transition-all duration-200 hover:bg-(--surface-panel-strong) hover:text-(--text-main)"
               type="button"
             >
               <span
-                className="grid h-2 w-2 place-items-center rounded-full bg-[var(--main)]"
+                className="grid h-2 w-2 place-items-center rounded-full bg-(--main)"
                 aria-hidden="true"
               />
               {session}

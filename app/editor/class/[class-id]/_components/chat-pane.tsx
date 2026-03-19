@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import {
   ArrowRightIcon,
+  ChevronDownIcon,
   MicrophoneIcon,
   PaperClipIcon,
 } from "@heroicons/react/24/outline";
@@ -9,42 +11,55 @@ import type { Message } from "../_lib/workspace-data";
 
 type ChatPaneProps = {
   locked: boolean;
+  onHide: () => void;
   scopeLabel: string;
   messages: Message[];
 };
 
-export function ChatPane({ locked, scopeLabel, messages }: ChatPaneProps) {
+export function ChatPane({ locked, onHide, scopeLabel, messages }: ChatPaneProps) {
+  const messageListRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!messageListRef.current) {
+      return;
+    }
+
+    messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+  }, [messages, scopeLabel]);
+
   return (
     <aside
-      className={`relative flex min-h-[480px] flex-col overflow-hidden border-t border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:col-span-2 xl:col-span-1 xl:min-h-0 xl:border-t-0 xl:border-l xl:border-(--border-soft) ${
+      className={`relative flex min-h-96 min-w-0 flex-col overflow-hidden border-t border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:h-full lg:min-h-0 xl:border-t-0 xl:border-l xl:border-(--border-soft) ${
         locked
           ? "pointer-events-none select-none opacity-[0.55] grayscale-[0.85] saturate-[0.7]"
           : ""
       }`}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-(--border-soft) px-5 pt-[22px] pb-[18px]">
+      <div className="flex items-center justify-between gap-3 border-b border-(--border-soft) px-5 py-5">
         <div>
           <h2 className="m-0">Study Assistant</h2>
-          <p className="mono-label mt-2.5 mb-0 inline-flex items-center rounded-full border border-(--border-soft) bg-(--surface-panel) px-3 py-2 text-[12px] font-medium uppercase tracking-[0.15em] text-(--text-muted)">
-            {scopeLabel}
-          </p>
         </div>
         <button
-          className="grid h-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) px-3 py-[9px] text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
+          className="grid h-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) px-3 py-2 text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
+          onClick={onHide}
           type="button"
+          aria-label="Hide chat"
         >
-          ...
+          <ChevronDownIcon className="h-5 w-5" aria-hidden="true" />
         </button>
       </div>
 
-      <div className="flex-1 overflow-auto px-4 pt-5 pb-32">
+      <div
+        ref={messageListRef}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-5 pb-40"
+      >
         {messages.map((message, index) => {
           const isUser = message.side === "user";
 
           return (
             <div
               key={`${message.author}-${index}`}
-              className={`mb-[18px] flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}
+              className={`mb-4 flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}
             >
               <div
                 className={`grid h-9 w-9 flex-none place-items-center rounded-full text-[11px] font-extrabold ${
@@ -56,15 +71,15 @@ export function ChatPane({ locked, scopeLabel, messages }: ChatPaneProps) {
               >
                 {isUser ? "Y" : "AI"}
               </div>
-              <div className={`max-w-[84%] ${isUser ? "text-right" : ""}`}>
+              <div className={`max-w-5/6 ${isUser ? "text-right" : ""}`}>
                 <span className="mb-1.5 block text-[12px] text-(--text-muted)">
                   {message.author} · {message.time}
                 </span>
                 <div
-                  className={`rounded-[20px] border px-4 py-3.5 leading-[1.6] shadow-(--shadow-main) ${
+                  className={`rounded-2xl border px-4 py-3.5 leading-relaxed shadow-md ${
                     isUser
-                      ? "rounded-br-[20px] rounded-bl-[6px] border-transparent bg-(--main) text-(--text-contrast)"
-                      : "rounded-br-[6px] rounded-bl-[20px] border-(--border-soft) bg-(--surface-base) text-(--text-main)"
+                      ? "rounded-br-2xl rounded-bl-md border-transparent bg-(--main) text-(--text-contrast)"
+                      : "rounded-br-md rounded-bl-2xl border-(--border-soft) bg-(--surface-base) text-(--text-main)"
                   }`}
                 >
                   {message.text}
@@ -75,8 +90,14 @@ export function ChatPane({ locked, scopeLabel, messages }: ChatPaneProps) {
         })}
       </div>
 
-      <div className="absolute right-4 bottom-[18px] left-4">
-        <div className="flex items-center gap-2.5 rounded-[22px] border border-(--border-strong) bg-(--surface-input) p-2.5 shadow-[0_10px_14px_rgba(44,44,36,0.08)] backdrop-blur-lg">
+      <div
+        className="pointer-events-none absolute right-0 bottom-0 left-0 z-10"
+        style={{ backgroundColor: "var(--surface-base)", height: "84px" }}
+        aria-hidden="true"
+      />
+
+      <div className="absolute right-4 bottom-4 left-4 z-20">
+        <div className="flex items-center gap-2.5 rounded-3xl border border-(--border-strong) bg-(--surface-input) p-2.5 shadow-lg backdrop-blur-lg">
           <button
             className="grid h-11 w-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
             type="button"

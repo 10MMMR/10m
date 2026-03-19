@@ -79,6 +79,8 @@
 html,
 body {
   height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
@@ -111,6 +113,7 @@ input:focus-visible {
 .workspace-shell {
   height: 100dvh;
   overflow: hidden;
+  overscroll-behavior: none;
   color: var(--text-main);
   background: var(--background);
   font-family: "Inter", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;

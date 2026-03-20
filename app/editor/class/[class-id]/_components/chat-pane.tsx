@@ -12,11 +12,10 @@ import type { Message } from "../_lib/workspace-data";
 type ChatPaneProps = {
   locked: boolean;
   onHide: () => void;
-  scopeLabel: string;
   messages: Message[];
 };
 
-export function ChatPane({ locked, onHide, scopeLabel, messages }: ChatPaneProps) {
+export function ChatPane({ locked, onHide, messages }: ChatPaneProps) {
   const messageListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -25,7 +24,7 @@ export function ChatPane({ locked, onHide, scopeLabel, messages }: ChatPaneProps
     }
 
     messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
-  }, [messages, scopeLabel]);
+  }, [messages.length]);
 
   return (
     <aside

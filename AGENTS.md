@@ -219,6 +219,16 @@ Avoid:
 - components exceeding ~200 lines unless necessary
 - mixing data fetching, heavy logic, and UI rendering in a single file
 
+---
+
+# Design System Reference
+
+When working on UI, always read and follow [`docs/design-system.md`](./docs/design-system.md) first.
+
+- Use it as the source of truth for visual direction, tokens, typography, spacing, motion, and component treatment.
+- If a request conflicts with the design system, call out the conflict instead of silently drifting.
+- Keep implementations aligned with the existing codebase and the repo editing rules above.
+
 When components grow too large:
 
 - extract logic into hooks

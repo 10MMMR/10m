@@ -1,12 +1,18 @@
 "use client";
 
 import { ChatBubbleLeftEllipsisIcon } from "@heroicons/react/24/outline";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChatPane } from "./chat-pane";
 import { EditorPane } from "./editor-pane";
 import { LeftPane } from "./left-pane";
 import { Topbar } from "./topbar";
 import { getWorkspaceSeed } from "../_lib/workspace-data";
+import {
+  cloneNote,
+  createDraftNote,
+  LocalStorageNoteRepository,
+  type Note,
+} from "@/lib/note-repository";
 
 type WorkspaceShellProps = {
   classId: string;
@@ -14,17 +20,31 @@ type WorkspaceShellProps = {
   usedFallback: boolean;
 };
 
+function buildUpdatedNote(note: Note, updates: Partial<Pick<Note, "title" | "body">>): Note {
+  return {
+    ...note,
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function WorkspaceShell({
   classId,
   requestedClassId,
   usedFallback,
 }: WorkspaceShellProps) {
   const workspace = getWorkspaceSeed(classId);
+  const repository = useRef(new LocalStorageNoteRepository());
   const [lockIn, setLockIn] = useState(false);
   const [isLeftPaneCollapsed, setIsLeftPaneCollapsed] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [isLgViewport, setIsLgViewport] = useState(false);
   const [isXlViewport, setIsXlViewport] = useState(false);
+
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [draftNote, setDraftNote] = useState<Note | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
 
   const desktopGridColumns = isLeftPaneCollapsed
     ? isChatOpen
@@ -43,6 +63,11 @@ export function WorkspaceShell({
       : isXlViewport
         ? "280px minmax(0,1fr)"
         : "250px minmax(0,1fr)";
+
+  const classNotes = useMemo(
+    () => [...notes].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
+    [notes],
+  );
 
   useEffect(() => {
     const mobileQuery = window.matchMedia("(max-width: 767px)");
@@ -76,6 +101,23 @@ export function WorkspaceShell({
     };
   }, []);
 
+  useEffect(() => {
+    const saved = repository.current.listByClass(classId);
+    setNotes(saved);
+
+    if (saved.length === 0) {
+      setSelectedNoteId(null);
+      setDraftNote(null);
+      setIsDirty(false);
+      return;
+    }
+
+    const firstNote = saved[0];
+    setSelectedNoteId(firstNote.id);
+    setDraftNote(cloneNote(firstNote));
+    setIsDirty(false);
+  }, [classId]);
+
   const handleHideChat = () => {
     if (!isChatOpen) {
       return;
@@ -88,6 +130,101 @@ export function WorkspaceShell({
       return;
     }
     setIsChatOpen(true);
+  };
+
+  const handleCreateNote = () => {
+    setSelectedNoteId(null);
+    setDraftNote(createDraftNote(classId));
+    setIsDirty(true);
+  };
+
+  const handleSelectNote = (noteId: string) => {
+    const note = repository.current.getById(classId, noteId);
+
+    if (!note) {
+      return;
+    }
+
+    setSelectedNoteId(note.id);
+    setDraftNote(cloneNote(note));
+    setIsDirty(false);
+  };
+
+  const handleDeleteNote = (noteId: string) => {
+    if (!window.confirm("Delete this note?")) {
+      return;
+    }
+
+    repository.current.deleteById(classId, noteId);
+
+    const saved = repository.current.listByClass(classId);
+    setNotes(saved);
+
+    if (selectedNoteId !== noteId) {
+      return;
+    }
+
+    if (saved.length === 0) {
+      setSelectedNoteId(null);
+      setDraftNote(null);
+      setIsDirty(false);
+      return;
+    }
+
+    setSelectedNoteId(saved[0].id);
+    setDraftNote(cloneNote(saved[0]));
+    setIsDirty(false);
+  };
+
+  const handleTitleChange = (title: string) => {
+    setDraftNote((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const next = buildUpdatedNote(current, { title });
+      setIsDirty(true);
+      return next;
+    });
+  };
+
+  const handleBodyChange = (body: string) => {
+    setDraftNote((current) => {
+      if (!current || current.body === body) {
+        return current;
+      }
+
+      const next = buildUpdatedNote(current, { body });
+      setIsDirty(true);
+      return next;
+    });
+  };
+
+  const handleSaveNote = () => {
+    if (!draftNote) {
+      return;
+    }
+
+    repository.current.save(draftNote);
+    const saved = repository.current.listByClass(classId);
+
+    setNotes(saved);
+    setSelectedNoteId(draftNote.id);
+    setIsDirty(false);
+  };
+
+  const handleDeleteCurrentNote = () => {
+    if (!draftNote) {
+      return;
+    }
+
+    if (!selectedNoteId) {
+      setDraftNote(null);
+      setIsDirty(false);
+      return;
+    }
+
+    handleDeleteNote(selectedNoteId);
   };
 
   return (
@@ -116,18 +253,24 @@ export function WorkspaceShell({
           collapsed={isLeftPaneCollapsed}
           onCollapse={() => setIsLeftPaneCollapsed(true)}
           onExpand={() => setIsLeftPaneCollapsed(false)}
-          explorerItems={workspace.explorerItems}
+          notes={classNotes}
+          classLabel={workspace.classLabel}
+          unitTitle={workspace.unitTitle}
           sessions={workspace.sessions}
+          selectedNoteId={selectedNoteId}
+          onSelectNote={handleSelectNote}
+          onCreateNote={handleCreateNote}
+          onDeleteNote={handleDeleteNote}
         />
         <EditorPane
           lockIn={lockIn}
           onToggleLockIn={() => setLockIn((current) => !current)}
-          unitTitle={workspace.unitTitle}
-          unitDescription={workspace.unitDescription}
-          sectionTitle={workspace.sectionTitle}
-          sectionBody={workspace.sectionBody}
-          tableHeaders={workspace.tableHeaders}
-          approaches={workspace.approaches}
+          note={draftNote}
+          isDirty={isDirty}
+          onTitleChange={handleTitleChange}
+          onBodyChange={handleBodyChange}
+          onSave={handleSaveNote}
+          onDelete={handleDeleteCurrentNote}
         />
         {isChatOpen ? (
           <div className="relative h-full min-h-0 min-w-0 overflow-hidden lg:col-span-2 xl:col-span-1">

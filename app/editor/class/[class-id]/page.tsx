@@ -13,15 +13,15 @@ type EditorClassPageProps = {
 
 function resolveSeed(requestedClassId: string) {
   const normalizedClassId = normalizeClassId(requestedClassId);
-  const seededClassId = isSeededClassId(normalizedClassId)
-    ? normalizedClassId
-    : DEFAULT_CLASS_ID;
+  const classId = normalizedClassId || DEFAULT_CLASS_ID;
+  const seededClassId = isSeededClassId(classId) ? classId : DEFAULT_CLASS_ID;
 
   return {
+    classId,
     normalizedClassId,
     seededClassId,
-    usedFallback: !isSeededClassId(normalizedClassId),
-    workspace: getWorkspaceSeed(normalizedClassId),
+    usedFallback: !isSeededClassId(classId),
+    workspace: getWorkspaceSeed(classId),
   };
 }
 
@@ -29,10 +29,10 @@ export async function generateMetadata({
   params,
 }: EditorClassPageProps): Promise<Metadata> {
   const { "class-id": requestedClassId } = await params;
-  const { seededClassId, workspace } = resolveSeed(requestedClassId);
+  const { classId, workspace } = resolveSeed(requestedClassId);
 
   return {
-    title: `${workspace.classLabel} (${seededClassId}) | Lumina Study`,
+    title: `${workspace.classLabel} (${classId}) | Lumina Study`,
     description: `Editor workspace for ${workspace.classLabel}.`,
   };
 }
@@ -41,11 +41,11 @@ export default async function EditorClassPage({
   params,
 }: EditorClassPageProps) {
   const { "class-id": requestedClassId } = await params;
-  const { seededClassId, usedFallback } = resolveSeed(requestedClassId);
+  const { classId, usedFallback } = resolveSeed(requestedClassId);
 
   return (
     <WorkspaceShell
-      classId={seededClassId}
+      classId={classId}
       requestedClassId={requestedClassId}
       usedFallback={usedFallback}
     />

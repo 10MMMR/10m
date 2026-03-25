@@ -166,7 +166,10 @@ export function EditorPane({
         </button>
       </div>
 
-      <div className="relative z-10 flex-1 overflow-auto">
+      <div
+        className="relative z-10 flex-1 overflow-auto overscroll-auto"
+        style={{ WebkitOverflowScrolling: "touch" }}
+      >
         <div className="min-h-full pt-7 pb-10 md:pt-28">
           <div className="min-h-full w-full bg-(--surface-editor-card) backdrop-blur-xl">
             <div

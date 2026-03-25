@@ -41,14 +41,13 @@ export default async function EditorClassPage({
   params,
 }: EditorClassPageProps) {
   const { "class-id": requestedClassId } = await params;
-  const { seededClassId, usedFallback, workspace } = resolveSeed(requestedClassId);
+  const { seededClassId, usedFallback } = resolveSeed(requestedClassId);
 
   return (
     <WorkspaceShell
       classId={seededClassId}
       requestedClassId={requestedClassId}
       usedFallback={usedFallback}
-      workspace={workspace}
     />
   );
 }

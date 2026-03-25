@@ -129,6 +129,30 @@ input:focus-visible {
   font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 
+.note-body-editor .tiptap {
+  min-height: 380px;
+  color: var(--text-body);
+  line-height: 1.75;
+  outline: none;
+}
+
+.note-body-editor .tiptap p {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+.note-body-editor .tiptap ul,
+.note-body-editor .tiptap ol {
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+}
+
+.note-body-editor .tiptap mark {
+  background: rgba(193, 140, 93, 0.28);
+  border-radius: 0.2em;
+  color: inherit;
+}
+
 @keyframes lock-pulse {
   0%,
   100% {

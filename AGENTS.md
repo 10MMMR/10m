@@ -313,12 +313,11 @@ Consistency across the codebase is more important than introducing new patterns.
 ## Screenshot Workflow (Playwright)
 
 - Install Playwright in the project:
-  `npm install -D playwright`
+  `pnpm install -D playwright`
 
 - Install the Chromium browser binary:
   `npx playwright install chromium`
 
-- Create `screenshot.mjs` in the project root.
 
 - **Always screenshot from localhost:**
   `node screenshot.mjs http://localhost:3000`

@@ -1,104 +1,338 @@
 "use client";
 
-import { useState } from "react";
 import {
+  ChevronDownIcon,
   ChevronDoubleLeftIcon,
   ChevronDoubleRightIcon,
   ChevronRightIcon,
-  Cog6ToothIcon,
+  DocumentIcon,
+  DocumentTextIcon,
+  EllipsisVerticalIcon,
+  FolderIcon,
+  PlusIcon,
 } from "@heroicons/react/24/outline";
-import type { ExplorerItem, ExplorerItemType } from "../_lib/workspace-data";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type DragEvent,
+  type MouseEvent,
+} from "react";
+import {
+  canDropNode,
+  type DropPosition,
+  type TreeNode,
+  type TreeNodeKind,
+} from "@/lib/tree-repository";
 
-function itemDotColor(type: ExplorerItemType) {
-  if (type === "semester") return "bg-(--secondary)";
-  if (type === "course") return "bg-(--main)";
-  if (type === "unit") return "bg-(--secondary-strong)";
-  return "bg-(--text-muted)";
-}
+type UploadFeedback = {
+  type: "success" | "error";
+  message: string;
+};
 
-function depthValue(type: ExplorerItemType) {
-  if (type === "semester") return 0;
-  if (type === "course") return 1;
-  if (type === "unit") return 2;
-  return 3;
-}
-
-function depthPadding(type: ExplorerItemType) {
-  if (type === "course") return "pl-4";
-  if (type === "unit") return "pl-8";
-  if (type === "material") return "pl-10";
-  return "";
-}
-
-function isFolder(type: ExplorerItemType) {
-  return type !== "material";
-}
+export type TreeAddAction = "folder" | "note" | "upload";
+export type TreeMenuAction = "add" | "delete";
 
 type LeftPaneProps = {
   locked: boolean;
   collapsed: boolean;
   onCollapse: () => void;
   onExpand: () => void;
-  explorerItems: ExplorerItem[];
+  treeNodes: TreeNode[];
+  selectedNodeId: string | null;
+  selectedNodeKind: TreeNodeKind | null;
+  classLabel: string;
   sessions: string[];
+  uploadFeedback: UploadFeedback | null;
+  isUploadingPdf: boolean;
+  onSelectNode: (nodeId: string) => void;
+  onCreateFolder: () => void;
+  onAddAction: (nodeId: string, action: TreeAddAction) => void;
+  onMenuAction: (nodeId: string, action: TreeMenuAction) => void;
+  onMoveNode: (
+    dragNodeId: string,
+    targetNodeId: string,
+    position: DropPosition,
+  ) => void;
 };
+
+type DropIndicator = {
+  targetId: string;
+  position: DropPosition;
+};
+
+function getNodeIcon(kind: TreeNodeKind) {
+  if (kind === "folder" || kind === "root") {
+    return FolderIcon;
+  }
+
+  if (kind === "file") {
+    return DocumentIcon;
+  }
+
+  return DocumentTextIcon;
+}
+
+function formatUpdatedAt(updatedAt: string) {
+  const date = new Date(updatedAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function getAddOptions(kind: TreeNodeKind): TreeAddAction[] {
+  if (kind === "root" || kind === "folder") {
+    return ["folder", "note", "upload"];
+  }
+
+  if (kind === "file") {
+    return ["note"];
+  }
+
+  return [];
+}
+
+function getDefaultAddAction(kind: TreeNodeKind): TreeAddAction | null {
+  if (kind === "root" || kind === "folder" || kind === "file") {
+    return "note";
+  }
+
+  return null;
+}
+
+function getDepthPadding(depth: number) {
+  return `${depth * 18}px`;
+}
+
+type RowActionsProps = {
+  node: TreeNode;
+  isAddMenuOpen: boolean;
+  isRowMenuOpen: boolean;
+  onToggleAddMenu: (nodeId: string) => void;
+  onToggleRowMenu: (nodeId: string) => void;
+  onCloseMenus: () => void;
+  onAddAction: (nodeId: string, action: TreeAddAction) => void;
+  onMenuAction: (nodeId: string, action: TreeMenuAction) => void;
+};
+
+function RowActions({
+  node,
+  isAddMenuOpen,
+  isRowMenuOpen,
+  onToggleAddMenu,
+  onToggleRowMenu,
+  onCloseMenus,
+  onAddAction,
+  onMenuAction,
+}: RowActionsProps) {
+  const addOptions = getAddOptions(node.kind);
+  const defaultAddAction = getDefaultAddAction(node.kind);
+  const canDelete = node.kind !== "root";
+
+  const stopClick = (event: MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+  };
+
+  return (
+    <div className="flex items-center gap-0.5">
+      {addOptions.length > 0 ? (
+        <div className="relative" data-tree-popover>
+          <button
+            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+            onClick={(event) => {
+              stopClick(event);
+              onToggleAddMenu(node.id);
+            }}
+            type="button"
+          >
+            <PlusIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            <span className="sr-only">Add item</span>
+          </button>
+          {isAddMenuOpen ? (
+            <div className="absolute top-[calc(100%+4px)] right-0 z-10 w-36 rounded-xl border border-(--border-soft) bg-(--surface-base) p-1 shadow-(--shadow-floating)">
+              {addOptions.includes("folder") ? (
+                <button
+                  className="w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
+                  onClick={() => {
+                    onAddAction(node.id, "folder");
+                    onCloseMenus();
+                  }}
+                  type="button"
+                >
+                  New folder
+                </button>
+              ) : null}
+              {addOptions.includes("note") ? (
+                <button
+                  className="w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
+                  onClick={() => {
+                    onAddAction(node.id, "note");
+                    onCloseMenus();
+                  }}
+                  type="button"
+                >
+                  New note
+                </button>
+              ) : null}
+              {addOptions.includes("upload") ? (
+                <button
+                  className="w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
+                  onClick={() => {
+                    onAddAction(node.id, "upload");
+                    onCloseMenus();
+                  }}
+                  type="button"
+                >
+                  Upload file
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="relative" data-tree-popover>
+        <button
+          className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+          onClick={(event) => {
+            stopClick(event);
+            onToggleRowMenu(node.id);
+          }}
+          type="button"
+        >
+          <EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />
+          <span className="sr-only">Open menu</span>
+        </button>
+        {isRowMenuOpen ? (
+          <div className="absolute top-[calc(100%+4px)] right-0 z-10 w-28 rounded-xl border border-(--border-soft) bg-(--surface-base) p-1 shadow-(--shadow-floating)">
+            <button
+              className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors duration-150 ${
+                defaultAddAction
+                  ? "text-(--text-main) hover:bg-(--surface-main-faint)"
+                  : "cursor-not-allowed text-(--text-muted) opacity-50"
+              }`}
+              disabled={!defaultAddAction}
+              onClick={() => {
+                onMenuAction(node.id, "add");
+                onCloseMenus();
+              }}
+              type="button"
+            >
+              Add
+            </button>
+            <button
+              className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors duration-150 ${
+                canDelete
+                  ? "text-(--text-main) hover:bg-(--surface-main-faint)"
+                  : "cursor-not-allowed text-(--text-muted) opacity-50"
+              }`}
+              disabled={!canDelete}
+              onClick={() => {
+                onMenuAction(node.id, "delete");
+                onCloseMenus();
+              }}
+              type="button"
+            >
+              Delete
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 export function LeftPane({
   locked,
   collapsed,
   onCollapse,
   onExpand,
-  explorerItems,
+  treeNodes,
+  selectedNodeId,
+  selectedNodeKind,
+  classLabel,
   sessions,
+  uploadFeedback,
+  isUploadingPdf,
+  onSelectNode,
+  onCreateFolder,
+  onAddAction,
+  onMenuAction,
+  onMoveNode,
 }: LeftPaneProps) {
-  const [checkedState, setCheckedState] = useState(() =>
-    explorerItems.map((item) => item.checked),
-  );
-  const [openState, setOpenState] = useState(() =>
-    explorerItems.map((item) => isFolder(item.type)),
-  );
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [dragNodeId, setDragNodeId] = useState<string | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
+  const [openAddMenuForId, setOpenAddMenuForId] = useState<string | null>(null);
+  const [openRowMenuForId, setOpenRowMenuForId] = useState<string | null>(null);
 
-  function childIndexes(index: number) {
-    const indexes: number[] = [];
-    const currentDepth = depthValue(explorerItems[index].type);
+  useEffect(() => {
+    const handleDocumentClick = (event: globalThis.MouseEvent) => {
+      const target = event.target as Element | null;
 
-    for (let i = index + 1; i < explorerItems.length; i += 1) {
-      const nextDepth = depthValue(explorerItems[i].type);
-      if (nextDepth <= currentDepth) break;
-      indexes.push(i);
-    }
+      if (target?.closest("[data-tree-popover]")) {
+        return;
+      }
 
-    return indexes;
-  }
+      setOpenAddMenuForId(null);
+      setOpenRowMenuForId(null);
+    };
 
-  function toggleChecked(index: number, checked: boolean) {
-    setCheckedState((current) => {
-      const next = [...current];
-      next[index] = checked;
+    document.addEventListener("click", handleDocumentClick);
+    return () => document.removeEventListener("click", handleDocumentClick);
+  }, []);
 
-      if (isFolder(explorerItems[index].type)) {
-        for (const childIndex of childIndexes(index)) {
-          next[childIndex] = checked;
-        }
+  const closeAllMenus = () => {
+    setOpenAddMenuForId(null);
+    setOpenRowMenuForId(null);
+  };
+
+  const toggleAddMenu = (nodeId: string) => {
+    setOpenRowMenuForId(null);
+    setOpenAddMenuForId((current) => (current === nodeId ? null : nodeId));
+  };
+
+  const toggleRowMenu = (nodeId: string) => {
+    setOpenAddMenuForId(null);
+    setOpenRowMenuForId((current) => (current === nodeId ? null : nodeId));
+  };
+
+  const { rootNode, childrenByParent } = useMemo(() => {
+    const sortedNodes = [...treeNodes].sort((left, right) => left.order - right.order);
+    const childMap = new Map<string | null, TreeNode[]>();
+
+    sortedNodes.forEach((node) => {
+      const list = childMap.get(node.parentId) ?? [];
+      list.push(node);
+      childMap.set(node.parentId, list);
+    });
+
+    const root = sortedNodes.find((node) => node.kind === "root") ?? null;
+
+    return {
+      rootNode: root,
+      childrenByParent: childMap,
+    };
+  }, [treeNodes]);
+
+  const toggleExpanded = (nodeId: string) => {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
       }
 
       return next;
     });
-  }
-
-  function visibleItem(index: number) {
-    let parentDepth = depthValue(explorerItems[index].type);
-
-    for (let i = index - 1; i >= 0; i -= 1) {
-      const depth = depthValue(explorerItems[i].type);
-      if (depth < parentDepth) {
-        if (!openState[i]) return false;
-        parentDepth = depth;
-      }
-    }
-
-    return true;
-  }
+  };
 
   const asideClass = `flex min-h-0 flex-col overflow-hidden border-b border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:border-r lg:border-b-0 ${
     locked
@@ -106,12 +340,178 @@ export function LeftPane({
       : ""
   }`;
 
+  const resolveDropPosition = (
+    event: DragEvent<HTMLDivElement>,
+    node: TreeNode,
+  ): DropPosition => {
+    if (node.kind === "root") {
+      return "inside";
+    }
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const offset = event.clientY - bounds.top;
+    const ratio = offset / Math.max(bounds.height, 1);
+
+    if (ratio < 0.3) {
+      return "before";
+    }
+
+    if (ratio > 0.7) {
+      return "after";
+    }
+
+    return "inside";
+  };
+
+  const getRowClasses = (node: TreeNode) => {
+    const isSelected = selectedNodeId === node.id;
+    const selectedTone =
+      selectedNodeKind === "file"
+        ? "bg-(--surface-main-faint)"
+        : "bg-(--surface-main-faint)";
+
+    return `flex min-w-0 flex-1 items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 ${
+      isSelected ? selectedTone : "hover:bg-(--surface-main-faint)"
+    }`;
+  };
+
+  const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
+    const children = childrenByParent.get(node.id) ?? [];
+    const hasChildren = children.length > 0;
+    const isExpanded = node.kind === "root" || expandedIds.has(node.id);
+    const canToggle = hasChildren;
+    const Icon = getNodeIcon(node.kind);
+    const indent = getDepthPadding(depth);
+    const dropBeforeActive =
+      dropIndicator?.targetId === node.id && dropIndicator.position === "before";
+    const dropInsideActive =
+      dropIndicator?.targetId === node.id && dropIndicator.position === "inside";
+    const dropAfterActive =
+      dropIndicator?.targetId === node.id && dropIndicator.position === "after";
+
+    return (
+      <div key={node.id}>
+        <div
+          className="relative"
+          draggable={node.kind !== "root"}
+          onDragEnd={() => {
+            setDragNodeId(null);
+            setDropIndicator(null);
+          }}
+          onDragOver={(event) => {
+            if (!dragNodeId) {
+              return;
+            }
+
+            const position = resolveDropPosition(event, node);
+            if (!canDropNode(treeNodes, dragNodeId, node.id, position)) {
+              return;
+            }
+
+            event.preventDefault();
+            setDropIndicator({ targetId: node.id, position });
+          }}
+          onDragStart={() => {
+            setDragNodeId(node.id);
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+
+            if (!dragNodeId || !dropIndicator || dropIndicator.targetId !== node.id) {
+              return;
+            }
+
+            onMoveNode(dragNodeId, dropIndicator.targetId, dropIndicator.position);
+            setDragNodeId(null);
+            setDropIndicator(null);
+          }}
+        >
+          {dropBeforeActive ? (
+            <div className="absolute top-0 right-0 left-0 h-[2px] bg-(--main)" aria-hidden="true" />
+          ) : null}
+          {dropAfterActive ? (
+            <div className="absolute right-0 bottom-0 left-0 h-[2px] bg-(--main)" aria-hidden="true" />
+          ) : null}
+
+          <div
+            className={`flex items-start gap-2 px-2 py-1.5 ${
+              dropInsideActive ? "rounded-lg bg-(--surface-main-faint)" : ""
+            }`}
+            style={{ paddingLeft: `calc(${indent} + 8px)` }}
+          >
+            <button
+              className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center text-(--text-muted) ${
+                canToggle ? "" : "opacity-0"
+              }`}
+              onClick={() => {
+                if (canToggle) {
+                  toggleExpanded(node.id);
+                }
+              }}
+              type="button"
+            >
+              {canToggle ? (
+                isExpanded ? (
+                  <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <ChevronRightIcon className="h-4 w-4" aria-hidden="true" />
+                )
+              ) : null}
+            </button>
+
+            <button
+              className={getRowClasses(node)}
+              onClick={() => onSelectNode(node.id)}
+              type="button"
+            >
+              <Icon
+                className={`mt-1 h-4 w-4 shrink-0 ${
+                  node.kind === "root"
+                    ? "text-(--main)"
+                    : node.kind === "folder"
+                      ? "text-(--secondary)"
+                      : node.kind === "file"
+                        ? "text-(--text-secondary)"
+                        : "text-(--text-muted)"
+                }`}
+                aria-hidden="true"
+              />
+              <span className="min-w-0">
+                <span className="block truncate text-[14px] text-(--text-main)">
+                  {node.kind === "root" ? classLabel : node.title}
+                </span>
+                {node.kind !== "root" ? (
+                  <span className="block text-xs text-(--text-muted)">
+                    {formatUpdatedAt(node.updatedAt)}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+
+            <RowActions
+              node={node}
+              isAddMenuOpen={openAddMenuForId === node.id}
+              isRowMenuOpen={openRowMenuForId === node.id}
+              onToggleAddMenu={toggleAddMenu}
+              onToggleRowMenu={toggleRowMenu}
+              onCloseMenus={closeAllMenus}
+              onAddAction={onAddAction}
+              onMenuAction={onMenuAction}
+            />
+          </div>
+        </div>
+
+        {hasChildren && isExpanded ? children.map((child) => renderNode(child, depth + 1)) : null}
+      </div>
+    );
+  };
+
   if (collapsed) {
     return (
       <aside className={asideClass}>
         <div className="flex min-h-0 flex-1 flex-col items-center gap-3 p-3">
           <button
-            aria-label="Open workspace pane"
+            aria-label="Open notes pane"
             className="grid h-9 w-9 place-items-center rounded-xl border border-transparent bg-(--surface-main-soft) text-[13px] font-bold text-(--main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
             onClick={onExpand}
             type="button"
@@ -119,11 +519,12 @@ export function LeftPane({
             <ChevronDoubleRightIcon className="h-5 w-5" aria-hidden="true" />
           </button>
           <button
-            aria-label="Settings"
+            aria-label="Create folder"
             className="grid h-9 w-9 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+            onClick={onCreateFolder}
             type="button"
           >
-            <Cog6ToothIcon className="h-5 w-5" aria-hidden="true" />
+            <FolderIcon className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
       </aside>
@@ -135,13 +536,22 @@ export function LeftPane({
       <section className="flex min-h-0 flex-1 flex-col">
         <div className="flex items-center gap-3 border-b border-(--border-soft) p-3">
           <div className="grid h-9 w-9 place-items-center rounded-xl bg-(--surface-main-soft) text-[13px] font-bold text-(--main)">
-            T
+            N
           </div>
           <div className="flex-1">
-            <h2 className="m-0">Workspace</h2>
+            <h2 className="m-0">Notes</h2>
           </div>
           <button
-            aria-label="Collapse workspace pane"
+            aria-label="Create folder"
+            className="inline-flex h-9 items-center gap-1 rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) px-2.5 text-[12px] text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+            onClick={onCreateFolder}
+            type="button"
+          >
+            <FolderIcon className="h-4 w-4" aria-hidden="true" />
+            Folder
+          </button>
+          <button
+            aria-label="Collapse notes pane"
             className="grid h-9 w-9 place-items-center rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
             onClick={onCollapse}
             type="button"
@@ -150,117 +560,39 @@ export function LeftPane({
           </button>
         </div>
 
-        <div className="relative min-h-0 flex-1 overflow-auto px-2.5 pt-3 pb-4">
-          {explorerItems.map((item, index) => {
-            if (!visibleItem(index)) return null;
+        <div className="min-h-0 flex-1 overflow-auto p-3">
+          {uploadFeedback ? (
+            <p
+              className={`mb-3 rounded-xl border px-3 py-2 text-xs ${
+                uploadFeedback.type === "error"
+                  ? "border-(--border-accent) bg-(--surface-accent-soft) text-(--text-secondary)"
+                  : "border-(--border-soft) bg-(--surface-main-soft) text-(--main)"
+              }`}
+            >
+              {uploadFeedback.message}
+            </p>
+          ) : null}
+          {isUploadingPdf ? (
+            <p className="mb-2 text-xs text-(--text-muted)">Uploading PDF…</p>
+          ) : null}
 
-            const folder = isFolder(item.type);
-            const checked = checkedState[index];
-
-            return (
-              <div
-                key={`${item.type}-${item.title}-${index}`}
-                className={`relative flex items-center gap-2.5 rounded-none px-3 py-2.5 text-(--text-muted) transition-colors duration-150 ${
-                  checked ? "bg-(--surface-main-faint) text-(--text-main)" : ""
-                } ${depthPadding(item.type)}`}
-              >
-                {checked ? (
-                  <span
-                    className="pointer-events-none absolute top-0 bottom-0 left-0 w-1 bg-(--main)"
-                    aria-hidden="true"
-                  />
-                ) : null}
-                <div className="flex min-w-0 items-center gap-2.5 text-sm">
-                  {folder ? (
-                    <button
-                      aria-label={openState[index] ? "Collapse folder" : "Expand folder"}
-                      className="w-3.5 flex-none border-0 bg-transparent p-0 text-(--text-muted)"
-                      onClick={() =>
-                        setOpenState((current) => {
-                          const next = [...current];
-                          next[index] = !next[index];
-                          return next;
-                        })
-                      }
-                      type="button"
-                    >
-                      <ChevronRightIcon
-                        className={`inline-block h-4 w-4 transition-transform duration-150 ${
-                          openState[index] ? "rotate-90" : ""
-                        }`}
-                        aria-hidden="true"
-                      />
-                    </button>
-                  ) : (
-                    <span className="w-3.5 flex-none" aria-hidden="true" />
-                  )}
-
-                  <button
-                    className="flex min-w-0 items-center gap-2.5 border-0 bg-transparent p-0 text-left text-inherit"
-                    onClick={() => {
-                      const nextChecked = !checked;
-
-                      if (folder) {
-                        if (nextChecked) {
-                          setOpenState((current) => {
-                            const next = [...current];
-                            next[index] = true;
-                            return next;
-                          });
-                        }
-
-                        toggleChecked(index, nextChecked);
-                        return;
-                      }
-
-                      toggleChecked(index, nextChecked);
-                    }}
-                    type="button"
-                  >
-                    <span
-                      className={`h-2.5 w-2.5 flex-none rounded-full ${itemDotColor(item.type)}`}
-                      aria-hidden="true"
-                    />
-                    <span className="truncate">{item.title}</span>
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+          <div>{rootNode ? renderNode(rootNode, 0) : null}</div>
         </div>
       </section>
 
-      <section className="flex min-h-44 grow-0 shrink-0 basis-1/3 flex-col border-t border-(--border-soft) bg-(--surface-panel-soft)">
-        <div className="mono-label flex items-center justify-between border-b border-(--border-faint) px-5 py-4 text-[11px] font-medium uppercase tracking-[0.15em] text-(--text-muted)">
-          <span>Active sessions</span>
-          <span className="inline-grid h-7 w-7 place-items-center rounded-full bg-(--surface-main-soft) text-[12px] text-(--main)">
-            {sessions.length}
-          </span>
+      <section className="border-t border-(--border-soft) bg-(--surface-panel-soft)">
+        <div className="mono-label px-4 pt-3 pb-2 text-[11px] font-medium uppercase tracking-[0.15em] text-(--text-muted)">
+          Sessions
         </div>
-        <div className="min-h-0 flex-1 overflow-auto p-2.5">
+        <div className="max-h-40 overflow-auto px-2 pb-3">
           {sessions.map((session) => (
-            <button
+            <div
               key={session}
-              className="mb-1.5 flex h-11 w-full items-center gap-2.5 rounded-xl border-0 bg-transparent px-3 py-2.5 text-left text-[13px] text-(--text-muted) transition-all duration-200 hover:bg-(--surface-panel-strong) hover:text-(--text-main)"
-              type="button"
+              className="truncate rounded-lg px-2.5 py-1.5 text-[13px] text-(--text-muted)"
             >
-              <span
-                className="grid h-2 w-2 place-items-center rounded-full bg-(--main)"
-                aria-hidden="true"
-              />
               {session}
-            </button>
+            </div>
           ))}
-        </div>
-        <div className="border-t border-(--border-faint) p-2.5">
-          <button
-            aria-label="Settings"
-            className="flex h-11 w-full items-center gap-2.5 rounded-xl border-0 bg-transparent px-3 py-2.5 text-left text-[13px] text-(--text-muted) transition-all duration-200 hover:bg-(--surface-panel-strong) hover:text-(--text-main)"
-            type="button"
-          >
-            <Cog6ToothIcon className="h-5 w-5" aria-hidden="true" />
-            Settings
-          </button>
         </div>
       </section>
     </aside>

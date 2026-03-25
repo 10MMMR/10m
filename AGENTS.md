@@ -221,7 +221,7 @@ Avoid:
 
 ---
 
-# Design System Reference
+<!-- # Design System Reference
 
 When working on UI, always read and follow [`docs/design-system.md`](./docs/design-system.md) first.
 
@@ -234,7 +234,7 @@ When components grow too large:
 - extract logic into hooks
 - split UI into smaller components
 
----
+--- -->
 
 # Performance Best Practices
 
@@ -309,6 +309,45 @@ Agents should:
 - keep architectural decisions consistent
 
 Consistency across the codebase is more important than introducing new patterns.
+
+## Screenshot Workflow (Playwright)
+
+- Install Playwright in the project:
+  `npm install -D playwright`
+
+- Install the Chromium browser binary:
+  `npx playwright install chromium`
+
+- Create `screenshot.mjs` in the project root.
+
+- **Always screenshot from localhost:**
+  `node screenshot.mjs http://localhost:3000`
+
+- Screenshots should be saved automatically to
+  `./temporary-screenshots/screenshot-N.png`
+  (auto-incremented, never overwritten).
+
+- Optional label suffix:
+  `node screenshot.mjs http://localhost:3000 label`
+  → saves as `screenshot-N-label.png`
+
+- `screenshot.mjs` should:
+  - launch Chromium with Playwright
+  - open the provided URL
+  - wait for the page to load/render
+  - create `temporary-screenshots/` if needed
+  - save the screenshot to the next available filename
+
+- After screenshotting, read the PNG from `temporary-screenshots/`
+  with your image-reading tool for visual comparison.
+
+- When comparing, be specific:
+  `"heading is 32px but reference shows ~24px"`,
+  `"card gap is 16px but should be 24px"`
+
+- Check:
+  spacing/padding, font size/weight/line-height, colors (exact hex),
+  alignment, border-radius, shadows, image sizing
 
 ---
 

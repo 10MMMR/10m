@@ -1,4 +1,4 @@
-# Design System
+<!-- # Design System
 
 ## Purpose
 
@@ -152,4 +152,4 @@ If a motion library is not already part of the implementation, prefer CSS transi
 - Centralize tokens through CSS custom properties.
 - Keep components composable and locally consistent with the existing codebase.
 - Prefer reusing shared UI patterns over introducing one-off styles.
-- When the design system and existing codebase differ, preserve the repo's established architecture while adapting the visual layer.
+- When the design system and existing codebase differ, preserve the repo's established architecture while adapting the visual layer. -->

@@ -26,7 +26,7 @@ type MockEditor = {
 };
 
 jest.mock("@tiptap/react", () => {
-  const React = require("react");
+  const React = jest.requireActual<typeof import("react")>("react");
 
   function createEditor(onUpdate: UpdateHandler): MockEditor {
     const listeners = new Map<string, Set<() => void>>();

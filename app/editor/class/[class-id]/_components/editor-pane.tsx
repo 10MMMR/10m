@@ -25,17 +25,28 @@ import {
   TrashIcon,
   UnderlineIcon,
 } from "@heroicons/react/24/outline";
-import type { Note } from "@/lib/note-repository";
+
+type EditableDocument = {
+  title: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 type EditorPaneProps = {
   lockIn: boolean;
   onToggleLockIn: () => void;
-  note: Note | null;
+  note: EditableDocument | null;
   isDirty: boolean;
   onTitleChange: (title: string) => void;
   onBodyChange: (body: string) => void;
   onSave: () => void;
   onDelete: () => void;
+  saveLabel?: string;
+  titleLabel?: string;
+  titlePlaceholder?: string;
+  emptyStateTitle?: string;
+  emptyStateDescription?: string;
 };
 
 type ToolbarAction =
@@ -77,6 +88,11 @@ export function EditorPane({
   onBodyChange,
   onSave,
   onDelete,
+  saveLabel = "Save note",
+  titleLabel = "Note title",
+  titlePlaceholder = "Untitled note",
+  emptyStateTitle = "No note selected",
+  emptyStateDescription = "Create a note from the left pane to start writing.",
 }: EditorPaneProps) {
   const toolbarRowRef = useRef<HTMLDivElement>(null);
   const bodyUpdateTimeoutRef = useRef<number | null>(null);
@@ -520,7 +536,7 @@ export function EditorPane({
                         onClick={onSave}
                         type="button"
                       >
-                        Save note
+                        {saveLabel}
                       </button>
                       <button
                         className="inline-flex items-center gap-1 rounded-xl border border-(--border-soft) bg-(--surface-base) px-3 py-2 text-sm text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
@@ -534,13 +550,13 @@ export function EditorPane({
                   </div>
 
                   <label className="sr-only" htmlFor="note-title-input">
-                    Note title
+                    {titleLabel}
                   </label>
                   <input
                     id="note-title-input"
                     className="w-full border-0 bg-transparent p-0 font-[Georgia,'Times_New_Roman',serif] text-[clamp(2rem,5vw,3.6rem)] leading-[0.98] text-(--text-main) outline-none"
                     onChange={(event) => onTitleChange(event.target.value)}
-                    placeholder="Untitled note"
+                    placeholder={titlePlaceholder}
                     value={note.title}
                   />
 
@@ -557,9 +573,9 @@ export function EditorPane({
               ) : (
                 <div className="grid min-h-[320px] place-items-center rounded-[22px] border border-dashed border-(--border-soft) bg-(--surface-base)">
                   <div className="text-center">
-                    <p className="m-0 text-lg text-(--text-main)">No note selected</p>
+                    <p className="m-0 text-lg text-(--text-main)">{emptyStateTitle}</p>
                     <p className="mt-2 mb-0 text-sm text-(--text-muted)">
-                      Create a note from the left pane to start writing.
+                      {emptyStateDescription}
                     </p>
                   </div>
                 </div>

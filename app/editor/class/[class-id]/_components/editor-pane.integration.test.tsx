@@ -152,6 +152,10 @@ describe("EditorPane", () => {
     jest.clearAllMocks();
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   test("renders the empty state when no note is selected", () => {
     render(
       <EditorPane

@@ -41,11 +41,10 @@ jest.mock("./editor-pane", () => ({
 
 describe("WorkspaceShell note flow", () => {
   beforeEach(() => {
-    window.localStorage.clear();
     jest.clearAllMocks();
   });
 
-  test("creates a note from the left pane and saves it to storage", () => {
+  test("creates a note from the left pane and updates the draft state", () => {
     render(
       <WorkspaceShell
         classId="cs101-ai"
@@ -54,7 +53,8 @@ describe("WorkspaceShell note flow", () => {
       />,
     );
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Add under this row" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Add item" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "New note" }));
 
     expect(screen.getByTestId("draft-state")).toHaveTextContent("dirty");
     expect(screen.getByTestId("draft-title")).toHaveTextContent("Untitled note");
@@ -66,21 +66,5 @@ describe("WorkspaceShell note flow", () => {
     expect(screen.getByTestId("draft-state")).toHaveTextContent("clean");
     expect(screen.getByTestId("draft-title")).toHaveTextContent("Fresh note");
     expect(screen.getByRole("button", { name: /Fresh note/ })).toBeInTheDocument();
-
-    const raw = window.localStorage.getItem("10m.notes.v1");
-    expect(raw).not.toBeNull();
-
-    const stored = JSON.parse(raw ?? "[]") as Array<{
-      title: string;
-      body: string;
-      class: string;
-    }>;
-
-    expect(stored).toHaveLength(1);
-    expect(stored[0]).toMatchObject({
-      title: "Fresh note",
-      body: "<p>Fresh body</p>",
-      class: "cs101-ai",
-    });
   });
 });

@@ -1,11 +1,18 @@
 "use client";
 
 import { MoonIcon, SunIcon } from "@heroicons/react/24/solid";
+import { usePathname } from "next/navigation";
 import { useState } from "react";
 
 type ThemeMode = "light" | "dark";
+type ThemeTogglePlacement = "floating" | "inline";
+
+type ThemeTogglePillProps = {
+  placement?: ThemeTogglePlacement;
+};
 
 const STORAGE_KEY = "theme";
+const dashboardPrefixes = ["/app", "/classes", "/exams", "/calendar"];
 
 function readThemeFromDom(): ThemeMode {
   if (typeof document === "undefined") {
@@ -15,8 +22,13 @@ function readThemeFromDom(): ThemeMode {
   return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
 
-export function ThemeTogglePill() {
+export function ThemeTogglePill({ placement = "floating" }: ThemeTogglePillProps) {
+  const pathname = usePathname();
   const [theme, setTheme] = useState<ThemeMode>(() => readThemeFromDom());
+
+  const shouldHideFloatingPill = dashboardPrefixes.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
 
   const setActiveTheme = (nextTheme: ThemeMode) => {
     document.documentElement.dataset.theme = nextTheme;
@@ -24,8 +36,12 @@ export function ThemeTogglePill() {
     setTheme(nextTheme);
   };
 
+  if (placement === "floating" && shouldHideFloatingPill) {
+    return null;
+  }
+
   return (
-    <div className="theme-toggle-shell">
+    <div className={placement === "floating" ? "theme-toggle-shell" : "theme-toggle-shell-inline"}>
       <div className="theme-toggle-pill" role="group" aria-label="Toggle color mode">
         <button
           aria-label="Use light mode"

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Fraunces, Geist_Mono, Nunito } from "next/font/google";
+import { SiteFooter } from "./_components/site-footer";
 import { ThemeTogglePill } from "./_components/theme-toggle-pill";
 import "./globals.css";
 
@@ -65,6 +66,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <ThemeTogglePill />
         {children}
+        <SiteFooter />
       </body>
     </html>
   );

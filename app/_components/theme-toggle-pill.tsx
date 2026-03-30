@@ -2,7 +2,7 @@
 
 import { MoonIcon, SunIcon } from "@heroicons/react/24/solid";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 
 type ThemeMode = "light" | "dark";
 type ThemeTogglePlacement = "floating" | "inline";
@@ -12,19 +12,53 @@ type ThemeTogglePillProps = {
 };
 
 const STORAGE_KEY = "theme";
-const dashboardPrefixes = ["/app", "/classes", "/exams", "/calendar"];
+const THEME_CHANGE_EVENT = "theme-change";
+const dashboardPrefixes = ["/app"];
 
-function readThemeFromDom(): ThemeMode {
-  if (typeof document === "undefined") {
-    return "light";
+function readThemePreference(): ThemeMode | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const stored = window.localStorage.getItem(STORAGE_KEY);
+  if (stored === "dark" || stored === "light") {
+    return stored;
   }
 
   return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
 
+function subscribeToThemePreference(callback: () => void) {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  const handleStorage = (event: StorageEvent) => {
+    if (!event.key || event.key === STORAGE_KEY) {
+      callback();
+    }
+  };
+
+  const handleThemeChange = () => {
+    callback();
+  };
+
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(THEME_CHANGE_EVENT, handleThemeChange);
+
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(THEME_CHANGE_EVENT, handleThemeChange);
+  };
+}
+
 export function ThemeTogglePill({ placement = "floating" }: ThemeTogglePillProps) {
   const pathname = usePathname();
-  const [theme, setTheme] = useState<ThemeMode>(() => readThemeFromDom());
+  const theme = useSyncExternalStore(
+    subscribeToThemePreference,
+    readThemePreference,
+    () => null,
+  );
 
   const shouldHideFloatingPill = dashboardPrefixes.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
@@ -33,10 +67,14 @@ export function ThemeTogglePill({ placement = "floating" }: ThemeTogglePillProps
   const setActiveTheme = (nextTheme: ThemeMode) => {
     document.documentElement.dataset.theme = nextTheme;
     localStorage.setItem(STORAGE_KEY, nextTheme);
-    setTheme(nextTheme);
+    window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
   };
 
   if (placement === "floating" && shouldHideFloatingPill) {
+    return null;
+  }
+
+  if (!theme) {
     return null;
   }
 

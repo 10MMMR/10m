@@ -339,6 +339,10 @@ input:focus-visible {
   z-index: 60;
 }
 
+.theme-toggle-shell-inline {
+  width: 100%;
+}
+
 .theme-toggle-pill {
   display: inline-flex;
   align-items: center;
@@ -349,6 +353,11 @@ input:focus-visible {
   padding: 0.34rem;
   box-shadow: var(--shadow-soft);
   backdrop-filter: blur(14px);
+}
+
+.theme-toggle-shell-inline .theme-toggle-pill {
+  display: flex;
+  width: 100%;
 }
 
 .theme-toggle-button {
@@ -369,6 +378,11 @@ input:focus-visible {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   transition: all 180ms ease;
+}
+
+.theme-toggle-shell-inline .theme-toggle-button {
+  flex: 1;
+  min-width: 0;
 }
 
 .theme-toggle-button[aria-pressed="true"] {

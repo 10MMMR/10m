@@ -140,54 +140,54 @@ function RowActions({
   };
 
   return (
-    <div className="flex items-center gap-0.5">
+    <div className='flex items-center gap-0.5'>
       {addOptions.length > 0 ? (
-        <div className="relative" data-tree-popover>
+        <div className='relative' data-tree-popover>
           <button
-            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+            className='inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
             onClick={(event) => {
               stopClick(event);
               onToggleAddMenu(node.id);
             }}
-            type="button"
+            type='button'
           >
-            <PlusIcon className="h-3.5 w-3.5" aria-hidden="true" />
-            <span className="sr-only">Add item</span>
+            <PlusIcon className='h-3.5 w-3.5' aria-hidden='true' />
+            <span className='sr-only'>Add item</span>
           </button>
           {isAddMenuOpen ? (
-            <div className="absolute top-[calc(100%+4px)] right-0 z-10 w-36 rounded-xl border border-(--border-soft) bg-(--surface-base) p-1 shadow-(--shadow-floating)">
+            <div className='absolute top-[calc(100%+4px)] right-0 z-10 w-36 rounded-xl border border-(--border-soft) bg-(--surface-base) p-1 shadow-(--shadow-floating)'>
               {addOptions.includes("folder") ? (
                 <button
-                  className="w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
+                  className='w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)'
                   onClick={() => {
                     onAddAction(node.id, "folder");
                     onCloseMenus();
                   }}
-                  type="button"
+                  type='button'
                 >
                   New folder
                 </button>
               ) : null}
               {addOptions.includes("note") ? (
                 <button
-                  className="w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
+                  className='w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)'
                   onClick={() => {
                     onAddAction(node.id, "note");
                     onCloseMenus();
                   }}
-                  type="button"
+                  type='button'
                 >
                   New note
                 </button>
               ) : null}
               {addOptions.includes("upload") ? (
                 <button
-                  className="w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
+                  className='w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)'
                   onClick={() => {
                     onAddAction(node.id, "upload");
                     onCloseMenus();
                   }}
-                  type="button"
+                  type='button'
                 >
                   Upload file
                 </button>
@@ -197,20 +197,20 @@ function RowActions({
         </div>
       ) : null}
 
-      <div className="relative" data-tree-popover>
+      <div className='relative' data-tree-popover>
         <button
-          className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+          className='inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
           onClick={(event) => {
             stopClick(event);
             onToggleRowMenu(node.id);
           }}
-          type="button"
+          type='button'
         >
-          <EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />
-          <span className="sr-only">Open menu</span>
+          <EllipsisVerticalIcon className='h-4 w-4' aria-hidden='true' />
+          <span className='sr-only'>Open menu</span>
         </button>
         {isRowMenuOpen ? (
-          <div className="absolute top-[calc(100%+4px)] right-0 z-10 w-28 rounded-xl border border-(--border-soft) bg-(--surface-base) p-1 shadow-(--shadow-floating)">
+          <div className='absolute top-[calc(100%+4px)] right-0 z-10 w-28 rounded-xl border border-(--border-soft) bg-(--surface-base) p-1 shadow-(--shadow-floating)'>
             <button
               className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors duration-150 ${
                 defaultAddAction
@@ -222,7 +222,7 @@ function RowActions({
                 onMenuAction(node.id, "add");
                 onCloseMenus();
               }}
-              type="button"
+              type='button'
             >
               Add
             </button>
@@ -237,7 +237,7 @@ function RowActions({
                 onMenuAction(node.id, "delete");
                 onCloseMenus();
               }}
-              type="button"
+              type='button'
             >
               Delete
             </button>
@@ -268,7 +268,9 @@ export function LeftPane({
 }: LeftPaneProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [dragNodeId, setDragNodeId] = useState<string | null>(null);
-  const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(
+    null,
+  );
   const [openAddMenuForId, setOpenAddMenuForId] = useState<string | null>(null);
   const [openRowMenuForId, setOpenRowMenuForId] = useState<string | null>(null);
 
@@ -304,7 +306,9 @@ export function LeftPane({
   };
 
   const { rootNode, childrenByParent } = useMemo(() => {
-    const sortedNodes = [...treeNodes].sort((left, right) => left.order - right.order);
+    const sortedNodes = [...treeNodes].sort(
+      (left, right) => left.order - right.order,
+    );
     const childMap = new Map<string | null, TreeNode[]>();
 
     sortedNodes.forEach((node) => {
@@ -383,16 +387,18 @@ export function LeftPane({
     const Icon = getNodeIcon(node.kind);
     const indent = getDepthPadding(depth);
     const dropBeforeActive =
-      dropIndicator?.targetId === node.id && dropIndicator.position === "before";
+      dropIndicator?.targetId === node.id &&
+      dropIndicator.position === "before";
     const dropInsideActive =
-      dropIndicator?.targetId === node.id && dropIndicator.position === "inside";
+      dropIndicator?.targetId === node.id &&
+      dropIndicator.position === "inside";
     const dropAfterActive =
       dropIndicator?.targetId === node.id && dropIndicator.position === "after";
 
     return (
       <div key={node.id}>
         <div
-          className="relative"
+          className='relative'
           draggable={node.kind !== "root"}
           onDragEnd={() => {
             setDragNodeId(null);
@@ -417,20 +423,34 @@ export function LeftPane({
           onDrop={(event) => {
             event.preventDefault();
 
-            if (!dragNodeId || !dropIndicator || dropIndicator.targetId !== node.id) {
+            if (
+              !dragNodeId ||
+              !dropIndicator ||
+              dropIndicator.targetId !== node.id
+            ) {
               return;
             }
 
-            onMoveNode(dragNodeId, dropIndicator.targetId, dropIndicator.position);
+            onMoveNode(
+              dragNodeId,
+              dropIndicator.targetId,
+              dropIndicator.position,
+            );
             setDragNodeId(null);
             setDropIndicator(null);
           }}
         >
           {dropBeforeActive ? (
-            <div className="absolute top-0 right-0 left-0 h-[2px] bg-(--main)" aria-hidden="true" />
+            <div
+              className='absolute top-0 right-0 left-0 h-[2px] bg-(--main)'
+              aria-hidden='true'
+            />
           ) : null}
           {dropAfterActive ? (
-            <div className="absolute right-0 bottom-0 left-0 h-[2px] bg-(--main)" aria-hidden="true" />
+            <div
+              className='absolute right-0 bottom-0 left-0 h-[2px] bg-(--main)'
+              aria-hidden='true'
+            />
           ) : null}
 
           <div
@@ -448,13 +468,13 @@ export function LeftPane({
                   toggleExpanded(node.id);
                 }
               }}
-              type="button"
+              type='button'
             >
               {canToggle ? (
                 isExpanded ? (
-                  <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+                  <ChevronDownIcon className='h-4 w-4' aria-hidden='true' />
                 ) : (
-                  <ChevronRightIcon className="h-4 w-4" aria-hidden="true" />
+                  <ChevronRightIcon className='h-4 w-4' aria-hidden='true' />
                 )
               ) : null}
             </button>
@@ -462,7 +482,7 @@ export function LeftPane({
             <button
               className={getRowClasses(node)}
               onClick={() => onSelectNode(node.id)}
-              type="button"
+              type='button'
             >
               <Icon
                 className={`mt-1 h-4 w-4 shrink-0 ${
@@ -474,14 +494,14 @@ export function LeftPane({
                         ? "text-(--text-secondary)"
                         : "text-(--text-muted)"
                 }`}
-                aria-hidden="true"
+                aria-hidden='true'
               />
-              <span className="min-w-0">
-                <span className="block truncate text-[14px] text-(--text-main)">
+              <span className='min-w-0'>
+                <span className='block truncate text-[14px] text-(--text-main)'>
                   {node.kind === "root" ? classLabel : node.title}
                 </span>
                 {node.kind !== "root" ? (
-                  <span className="block text-xs text-(--text-muted)">
+                  <span className='block text-xs text-(--text-muted)'>
                     {formatUpdatedAt(node.updatedAt)}
                   </span>
                 ) : null}
@@ -501,7 +521,9 @@ export function LeftPane({
           </div>
         </div>
 
-        {hasChildren && isExpanded ? children.map((child) => renderNode(child, depth + 1)) : null}
+        {hasChildren && isExpanded
+          ? children.map((child) => renderNode(child, depth + 1))
+          : null}
       </div>
     );
   };
@@ -509,22 +531,22 @@ export function LeftPane({
   if (collapsed) {
     return (
       <aside className={asideClass}>
-        <div className="flex min-h-0 flex-1 flex-col items-center gap-3 p-3">
+        <div className='flex min-h-0 flex-1 flex-col items-center gap-3 p-3'>
           <button
-            aria-label="Open notes pane"
-            className="grid h-9 w-9 place-items-center rounded-xl border border-transparent bg-(--surface-main-soft) text-[13px] font-bold text-(--main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
+            aria-label='Open notes pane'
+            className='grid h-9 w-9 place-items-center rounded-xl border border-transparent bg-(--surface-main-soft) text-[13px] font-bold text-(--main) transition-colors duration-150 hover:bg-(--surface-main-faint)'
             onClick={onExpand}
-            type="button"
+            type='button'
           >
-            <ChevronDoubleRightIcon className="h-5 w-5" aria-hidden="true" />
+            <ChevronDoubleRightIcon className='h-5 w-5' aria-hidden='true' />
           </button>
           <button
-            aria-label="Create folder"
-            className="grid h-9 w-9 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+            aria-label='Create folder'
+            className='grid h-9 w-9 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
             onClick={onCreateFolder}
-            type="button"
+            type='button'
           >
-            <FolderIcon className="h-5 w-5" aria-hidden="true" />
+            <FolderIcon className='h-5 w-5' aria-hidden='true' />
           </button>
         </div>
       </aside>
@@ -533,34 +555,34 @@ export function LeftPane({
 
   return (
     <aside className={asideClass}>
-      <section className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-3 border-b border-(--border-soft) p-3">
-          <div className="grid h-9 w-9 place-items-center rounded-xl bg-(--surface-main-soft) text-[13px] font-bold text-(--main)">
+      <section className='flex min-h-0 flex-1 flex-col'>
+        <div className='flex items-center gap-3 border-b border-(--border-soft) p-3'>
+          <div className='grid h-9 w-9 place-items-center rounded-xl bg-(--surface-main-soft) text-[13px] font-bold text-(--main)'>
             N
           </div>
-          <div className="flex-1">
-            <h2 className="m-0">Notes</h2>
+          <div className='flex-1'>
+            <h2 className='m-0'>Notes</h2>
           </div>
           <button
-            aria-label="Create folder"
-            className="inline-flex h-9 items-center gap-1 rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) px-2.5 text-[12px] text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+            aria-label='Create folder'
+            className='inline-flex h-9 items-center gap-1 rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) px-2.5 text-[12px] text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
             onClick={onCreateFolder}
-            type="button"
+            type='button'
           >
-            <FolderIcon className="h-4 w-4" aria-hidden="true" />
+            <FolderIcon className='h-4 w-4' aria-hidden='true' />
             Folder
           </button>
           <button
-            aria-label="Collapse notes pane"
-            className="grid h-9 w-9 place-items-center rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+            aria-label='Collapse notes pane'
+            className='grid h-9 w-9 place-items-center rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
             onClick={onCollapse}
-            type="button"
+            type='button'
           >
-            <ChevronDoubleLeftIcon className="h-5 w-5" aria-hidden="true" />
+            <ChevronDoubleLeftIcon className='h-5 w-5' aria-hidden='true' />
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto p-3">
+        <div className='min-h-0 flex-1 overflow-auto p-3'>
           {uploadFeedback ? (
             <p
               className={`mb-3 rounded-xl border px-3 py-2 text-xs ${
@@ -573,22 +595,22 @@ export function LeftPane({
             </p>
           ) : null}
           {isUploadingPdf ? (
-            <p className="mb-2 text-xs text-(--text-muted)">Uploading PDF…</p>
+            <p className='mb-2 text-xs text-(--text-muted)'>Uploading PDF…</p>
           ) : null}
 
           <div>{rootNode ? renderNode(rootNode, 0) : null}</div>
         </div>
       </section>
 
-      <section className="border-t border-(--border-soft) bg-(--surface-panel-soft)">
-        <div className="mono-label px-4 pt-3 pb-2 text-[11px] font-medium uppercase tracking-[0.15em] text-(--text-muted)">
+      <section className='border-t border-(--border-soft) bg-(--surface-panel-soft)'>
+        <div className='mono-label px-4 pt-3 pb-2 text-[11px] font-medium uppercase tracking-[0.15em] text-(--text-muted)'>
           Sessions
         </div>
-        <div className="max-h-40 overflow-auto px-2 pb-3">
+        <div className='max-h-40 overflow-auto px-2 pb-3'>
           {sessions.map((session) => (
             <div
               key={session}
-              className="truncate rounded-lg px-2.5 py-1.5 text-[13px] text-(--text-muted)"
+              className='truncate rounded-lg px-2.5 py-1.5 text-[13px] text-(--text-muted)'
             >
               {session}
             </div>

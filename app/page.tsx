@@ -1,4 +1,5 @@
 import { PricingSection } from "./_components/pricing-section";
+import { SiteLogo } from "./_components/site-logo";
 
 export default function Home() {
   return (
@@ -16,10 +17,7 @@ export default function Home() {
             className="flex cursor-pointer items-center gap-3"
             aria-label="Scroll to top"
           >
-            <span className="grid h-10 w-10 place-items-center rounded-full bg-(--main) text-sm font-extrabold text-(--text-contrast)">
-              10M
-            </span>
-            <p className="display-font text-lg font-bold">10M Study</p>
+            <SiteLogo />
           </a>
           <div className="hidden items-center gap-7 text-base text-(--text-muted) md:flex">
             <a
@@ -241,24 +239,24 @@ export default function Home() {
         <PricingSection />
 
         <section className="section-shell max-w-5xl pb-8">
-          <div className="organic-card rounded-[2.8rem] bg-(--main) p-8 text-(--text-contrast) shadow-(--shadow-float) sm:p-12">
-            <p className="mono-label text-[11px] uppercase tracking-[0.14em] text-(--accent)">
+          <div className="organic-card rounded-[2.8rem] bg-(--surface-panel-strong) p-8 text-(--text-main) shadow-(--shadow-float) sm:p-12">
+            <p className="mono-label text-[11px] uppercase tracking-[0.14em] text-(--text-secondary)">
               Next Step
             </p>
             <h2 className="display-font mt-4 text-4xl font-bold leading-[1.02] md:text-5xl">
               Your study app foundation is now styled and ready for feature buildout.
             </h2>
-            <p className="mt-5 max-w-3xl text-base text-[rgba(243,244,241,0.86)]">
+            <p className="mt-5 max-w-3xl text-base text-(--text-muted)">
               This homepage is set up as a demo surface for your mock exams,
               smart flashcards, AI summaries, and adaptive weakness coaching.
             </p>
             <form className="mt-7 flex flex-col gap-3 sm:flex-row">
               <input
-                className="organic-input min-h-12 border-white/25 bg-white/15 text-(--text-contrast) placeholder:text-[rgba(243,244,241,0.72)]"
+                className="organic-input min-h-12 border-(--border-soft) bg-(--surface-input) text-(--text-main) placeholder:text-(--text-muted)"
                 placeholder="Enter your email for launch access"
                 type="email"
               />
-              <button className="organic-button h-12 border border-white/30 bg-white px-6 py-0 font-bold text-(--main) transition-all duration-300 hover:scale-[1.03]">
+              <button className="organic-button organic-button-primary h-12 w-full whitespace-nowrap px-6 py-0 sm:w-auto">
                 Reserve Spot
               </button>
             </form>

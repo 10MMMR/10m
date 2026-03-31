@@ -14,6 +14,7 @@ import {
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type DragEvent,
   type MouseEvent,
@@ -31,7 +32,13 @@ type UploadFeedback = {
 };
 
 export type TreeAddAction = "folder" | "note" | "upload";
-export type TreeMenuAction = "add" | "delete";
+export type TreeMenuAction = "add" | "delete" | "generate-notes";
+export type TreeSelectionMode = "single" | "toggle" | "range";
+
+export type SelectTreeNodeOptions = {
+  mode: TreeSelectionMode;
+  orderedNodeIds: string[];
+};
 
 type LeftPaneProps = {
   locked: boolean;
@@ -39,16 +46,17 @@ type LeftPaneProps = {
   onCollapse: () => void;
   onExpand: () => void;
   treeNodes: TreeNode[];
+  selectedNodeIds: string[];
   selectedNodeId: string | null;
-  selectedNodeKind: TreeNodeKind | null;
   classLabel: string;
   sessions: string[];
   uploadFeedback: UploadFeedback | null;
   isUploadingPdf: boolean;
-  onSelectNode: (nodeId: string) => void;
+  onSelectNode: (nodeId: string, options: SelectTreeNodeOptions) => void;
   onCreateFolder: () => void;
   onAddAction: (nodeId: string, action: TreeAddAction) => void;
   onMenuAction: (nodeId: string, action: TreeMenuAction) => void;
+  onPrepareRowMenu: (nodeId: string) => void;
   onMoveNode: (
     dragNodeId: string,
     targetNodeId: string,
@@ -114,22 +122,28 @@ type RowActionsProps = {
   node: TreeNode;
   isAddMenuOpen: boolean;
   isRowMenuOpen: boolean;
+  buttonToneClass: string;
   onToggleAddMenu: (nodeId: string) => void;
   onToggleRowMenu: (nodeId: string) => void;
   onCloseMenus: () => void;
   onAddAction: (nodeId: string, action: TreeAddAction) => void;
   onMenuAction: (nodeId: string, action: TreeMenuAction) => void;
+  onPrepareRowMenu: (nodeId: string) => void;
+  canGenerateNotes: boolean;
 };
 
 function RowActions({
   node,
   isAddMenuOpen,
   isRowMenuOpen,
+  buttonToneClass,
   onToggleAddMenu,
   onToggleRowMenu,
   onCloseMenus,
   onAddAction,
   onMenuAction,
+  onPrepareRowMenu,
+  canGenerateNotes,
 }: RowActionsProps) {
   const addOptions = getAddOptions(node.kind);
   const defaultAddAction = getDefaultAddAction(node.kind);
@@ -144,7 +158,7 @@ function RowActions({
       {addOptions.length > 0 ? (
         <div className='relative' data-tree-popover>
           <button
-            className='inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
+            className={`inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors duration-150 ${buttonToneClass}`}
             onClick={(event) => {
               stopClick(event);
               onToggleAddMenu(node.id);
@@ -199,9 +213,10 @@ function RowActions({
 
       <div className='relative' data-tree-popover>
         <button
-          className='inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
+          className={`inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors duration-150 ${buttonToneClass}`}
           onClick={(event) => {
             stopClick(event);
+            onPrepareRowMenu(node.id);
             onToggleRowMenu(node.id);
           }}
           type='button'
@@ -210,7 +225,7 @@ function RowActions({
           <span className='sr-only'>Open menu</span>
         </button>
         {isRowMenuOpen ? (
-          <div className='absolute top-[calc(100%+4px)] right-0 z-10 w-28 rounded-xl border border-(--border-soft) bg-(--surface-base) p-1 shadow-(--shadow-floating)'>
+          <div className='absolute top-[calc(100%+4px)] right-0 z-10 w-36 rounded-xl border border-(--border-soft) bg-(--surface-base) p-1 shadow-(--shadow-floating)'>
             <button
               className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors duration-150 ${
                 defaultAddAction
@@ -241,6 +256,21 @@ function RowActions({
             >
               Delete
             </button>
+            <button
+              className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors duration-150 ${
+                canGenerateNotes
+                  ? "text-(--text-main) hover:bg-(--surface-main-faint)"
+                  : "cursor-not-allowed text-(--text-muted) opacity-50"
+              }`}
+              disabled={!canGenerateNotes}
+              onClick={() => {
+                onMenuAction(node.id, "generate-notes");
+                onCloseMenus();
+              }}
+              type='button'
+            >
+              Generate notes
+            </button>
           </div>
         ) : null}
       </div>
@@ -254,8 +284,8 @@ export function LeftPane({
   onCollapse,
   onExpand,
   treeNodes,
+  selectedNodeIds,
   selectedNodeId,
-  selectedNodeKind,
   classLabel,
   sessions,
   uploadFeedback,
@@ -264,8 +294,10 @@ export function LeftPane({
   onCreateFolder,
   onAddAction,
   onMenuAction,
+  onPrepareRowMenu,
   onMoveNode,
 }: LeftPaneProps) {
+  const asideRef = useRef<HTMLElement>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [dragNodeId, setDragNodeId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(
@@ -273,6 +305,7 @@ export function LeftPane({
   );
   const [openAddMenuForId, setOpenAddMenuForId] = useState<string | null>(null);
   const [openRowMenuForId, setOpenRowMenuForId] = useState<string | null>(null);
+  const [hasPaneFocus, setHasPaneFocus] = useState(true);
 
   useEffect(() => {
     const handleDocumentClick = (event: globalThis.MouseEvent) => {
@@ -288,6 +321,26 @@ export function LeftPane({
 
     document.addEventListener("click", handleDocumentClick);
     return () => document.removeEventListener("click", handleDocumentClick);
+  }, []);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      setHasPaneFocus(Boolean(target && asideRef.current?.contains(target)));
+    };
+
+    const handleFocusIn = (event: FocusEvent) => {
+      const target = event.target as Node | null;
+      setHasPaneFocus(Boolean(target && asideRef.current?.contains(target)));
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("focusin", handleFocusIn);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("focusin", handleFocusIn);
+    };
   }, []);
 
   const closeAllMenus = () => {
@@ -338,6 +391,42 @@ export function LeftPane({
     });
   };
 
+  const visibleNodeIds = useMemo(() => {
+    if (!rootNode) {
+      return [];
+    }
+
+    const ids: string[] = [];
+
+    const walk = (node: TreeNode) => {
+      ids.push(node.id);
+
+      if (node.kind !== "root" && !expandedIds.has(node.id)) {
+        return;
+      }
+
+      const children = childrenByParent.get(node.id) ?? [];
+      children.forEach(walk);
+    };
+
+    walk(rootNode);
+    return ids;
+  }, [childrenByParent, expandedIds, rootNode]);
+
+  const selectedFileIds = useMemo(
+    () =>
+      new Set(
+        treeNodes
+          .filter(
+            (node) =>
+              selectedNodeIds.includes(node.id) &&
+              (node.kind === "note" || node.kind === "file"),
+          )
+          .map((node) => node.id),
+      ),
+    [selectedNodeIds, treeNodes],
+  );
+
   const asideClass = `flex min-h-0 flex-col overflow-hidden border-b border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:border-r lg:border-b-0 ${
     locked
       ? "pointer-events-none select-none opacity-[0.55] grayscale-[0.85] saturate-[0.7]"
@@ -367,16 +456,22 @@ export function LeftPane({
     return "inside";
   };
 
-  const getRowClasses = (node: TreeNode) => {
-    const isSelected = selectedNodeId === node.id;
-    const selectedTone =
-      selectedNodeKind === "file"
-        ? "bg-(--surface-main-faint)"
-        : "bg-(--surface-main-faint)";
+  const getRowClasses = (
+    node: TreeNode,
+    isSelected: boolean,
+    isActive: boolean,
+    dropInsideActive = false,
+  ) => {
+    const selectionTone = hasPaneFocus
+      ? "bg-(--surface-selection-active) text-(--text-selection-active) shadow-(--shadow-accent)"
+      : "bg-(--surface-selection-inactive) text-(--text-main)";
+    const rowTone = dropInsideActive
+      ? "bg-(--surface-main-faint)"
+      : isSelected
+        ? selectionTone
+        : "hover:bg-(--surface-main-faint)";
 
-    return `flex min-w-0 flex-1 items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 ${
-      isSelected ? selectedTone : "hover:bg-(--surface-main-faint)"
-    }`;
+    return `flex min-w-0 flex-1 items-start gap-2 px-2 py-1.5 text-left transition-colors duration-150 ${rowTone}`;
   };
 
   const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
@@ -394,6 +489,40 @@ export function LeftPane({
       dropIndicator.position === "inside";
     const dropAfterActive =
       dropIndicator?.targetId === node.id && dropIndicator.position === "after";
+    const isSelected = selectedNodeIds.includes(node.id);
+    const isActive = selectedNodeId === node.id;
+    const isPaneSelected = isSelected && hasPaneFocus;
+    const isPaneMutedSelected = isSelected && !hasPaneFocus;
+    const canGenerateNotes = isSelected
+      ? selectedFileIds.size > 0
+      : node.kind === "note" || node.kind === "file";
+    const toggleButtonTone = isPaneSelected
+      ? "text-(--text-selection-active)"
+      : "text-(--text-muted)";
+    const rowActionTone = isPaneSelected
+      ? "text-(--text-selection-active) hover:bg-(--surface-selection-active-hover) hover:text-(--text-selection-active)"
+      : isPaneMutedSelected
+        ? "text-(--text-main) hover:bg-(--surface-selection-inactive-hover) hover:text-(--text-main)"
+        : "text-(--text-muted) hover:bg-(--surface-main-faint) hover:text-(--text-main)";
+    const iconTone = isPaneSelected
+      ? "text-(--text-selection-active)"
+      : isPaneMutedSelected
+        ? "text-(--text-main)"
+        : node.kind === "root"
+          ? "text-(--main)"
+          : node.kind === "folder"
+            ? "text-(--secondary)"
+            : node.kind === "file"
+              ? "text-(--text-secondary)"
+              : "text-(--text-muted)";
+    const titleTone = isPaneSelected
+      ? "text-(--text-selection-active)"
+      : "text-(--text-main)";
+    const metaTone = isPaneSelected
+      ? "text-(--text-selection-active) opacity-80"
+      : isPaneMutedSelected
+        ? "text-(--text-muted)"
+        : "text-(--text-muted)";
 
     return (
       <div key={node.id}>
@@ -454,13 +583,11 @@ export function LeftPane({
           ) : null}
 
           <div
-            className={`flex items-start gap-2 px-2 py-1.5 ${
-              dropInsideActive ? "rounded-lg bg-(--surface-main-faint)" : ""
-            }`}
-            style={{ paddingLeft: `calc(${indent} + 8px)` }}
+            className={getRowClasses(node, isSelected, isActive, dropInsideActive)}
+            style={{ paddingLeft: `calc(${indent} + 16px)` }}
           >
             <button
-              className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center text-(--text-muted) ${
+              className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center ${toggleButtonTone} ${
                 canToggle ? "" : "opacity-0"
               }`}
               onClick={() => {
@@ -480,43 +607,43 @@ export function LeftPane({
             </button>
 
             <button
-              className={getRowClasses(node)}
-              onClick={() => onSelectNode(node.id)}
+              className='flex min-w-0 flex-1 items-start gap-2 text-left'
+              onClick={(event) =>
+                onSelectNode(node.id, {
+                  mode: event.shiftKey
+                    ? "range"
+                    : event.metaKey || event.ctrlKey
+                      ? "toggle"
+                      : "single",
+                  orderedNodeIds: visibleNodeIds,
+                })
+              }
               type='button'
             >
-              <Icon
-                className={`mt-1 h-4 w-4 shrink-0 ${
-                  node.kind === "root"
-                    ? "text-(--main)"
-                    : node.kind === "folder"
-                      ? "text-(--secondary)"
-                      : node.kind === "file"
-                        ? "text-(--text-secondary)"
-                        : "text-(--text-muted)"
-                }`}
-                aria-hidden='true'
-              />
+              <Icon className={`mt-1 h-4 w-4 shrink-0 ${iconTone}`} aria-hidden='true' />
               <span className='min-w-0'>
-                <span className='block truncate text-[14px] text-(--text-main)'>
+                <span className={`block truncate text-[14px] ${titleTone}`}>
                   {node.kind === "root" ? classLabel : node.title}
                 </span>
                 {node.kind !== "root" ? (
-                  <span className='block text-xs text-(--text-muted)'>
+                  <span className={`block text-xs ${metaTone}`}>
                     {formatUpdatedAt(node.updatedAt)}
                   </span>
                 ) : null}
               </span>
             </button>
-
             <RowActions
               node={node}
               isAddMenuOpen={openAddMenuForId === node.id}
               isRowMenuOpen={openRowMenuForId === node.id}
+              buttonToneClass={rowActionTone}
               onToggleAddMenu={toggleAddMenu}
               onToggleRowMenu={toggleRowMenu}
               onCloseMenus={closeAllMenus}
               onAddAction={onAddAction}
               onMenuAction={onMenuAction}
+              onPrepareRowMenu={onPrepareRowMenu}
+              canGenerateNotes={canGenerateNotes}
             />
           </div>
         </div>
@@ -530,7 +657,7 @@ export function LeftPane({
 
   if (collapsed) {
     return (
-      <aside className={asideClass}>
+      <aside ref={asideRef} className={asideClass}>
         <div className='flex min-h-0 flex-1 flex-col items-center gap-3 p-3'>
           <button
             aria-label='Open notes pane'
@@ -554,7 +681,7 @@ export function LeftPane({
   }
 
   return (
-    <aside className={asideClass}>
+    <aside ref={asideRef} className={asideClass}>
       <section className='flex min-h-0 flex-1 flex-col'>
         <div className='flex items-center gap-3 border-b border-(--border-soft) p-3'>
           <div className='grid h-9 w-9 place-items-center rounded-xl bg-(--surface-main-soft) text-[13px] font-bold text-(--main)'>
@@ -582,10 +709,10 @@ export function LeftPane({
           </button>
         </div>
 
-        <div className='min-h-0 flex-1 overflow-auto p-3'>
+        <div className='min-h-0 flex-1 overflow-auto py-3'>
           {uploadFeedback ? (
             <p
-              className={`mb-3 rounded-xl border px-3 py-2 text-xs ${
+              className={`mx-3 mb-3 rounded-xl border px-3 py-2 text-xs ${
                 uploadFeedback.type === "error"
                   ? "border-(--border-accent) bg-(--surface-accent-soft) text-(--text-secondary)"
                   : "border-(--border-soft) bg-(--surface-main-soft) text-(--main)"
@@ -595,7 +722,9 @@ export function LeftPane({
             </p>
           ) : null}
           {isUploadingPdf ? (
-            <p className='mb-2 text-xs text-(--text-muted)'>Uploading PDF…</p>
+            <p className='mx-3 mb-2 text-xs text-(--text-muted)'>
+              Uploading PDF…
+            </p>
           ) : null}
 
           <div>{rootNode ? renderNode(rootNode, 0) : null}</div>

@@ -10,6 +10,7 @@ export type TreeNode = {
   createdAt: string;
   updatedAt: string;
   fileDataUrl?: string;
+  fileStoragePath?: string;
   fileMimeType?: string;
   fileSize?: number;
   body?: string;

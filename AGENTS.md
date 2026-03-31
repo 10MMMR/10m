@@ -133,6 +133,7 @@ Follow typical Next.js patterns:
 - Separate UI from business logic when possible.
 - Avoid unnecessary client-side state.
 - Prefer server-side logic when appropriate.
+- When creating new React or Next.js code, always consult the available React skill guidance first and follow it unless a repo-specific rule here is stricter.
 
 ---
 
@@ -218,6 +219,17 @@ Avoid:
 
 - components exceeding ~200 lines unless necessary
 - mixing data fetching, heavy logic, and UI rendering in a single file
+
+---
+
+# Color System Rules
+
+When working on UI colors:
+
+- Only use colors defined in [`app/globals.css`](./app/globals.css).
+- Do not introduce one-off hex values, rgb/rgba values, or ad hoc Tailwind color classes in components.
+- Every color token used for UI work must have both a light mode and dark mode variant in `app/globals.css`.
+- If a needed color does not exist yet, add it to `app/globals.css` in both themes before using it.
 
 ---
 

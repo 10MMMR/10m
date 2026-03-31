@@ -38,6 +38,7 @@
   --text-body: #3a3a31;
   --text-muted: var(--muted-foreground);
   --text-contrast: var(--primary-foreground);
+  --text-selection-active: #f3f4f1;
   --text-secondary: #6e4e30;
   --surface-editor: var(--background);
   --surface-base: var(--card);
@@ -53,11 +54,17 @@
   --surface-main-soft: rgba(93, 112, 82, 0.14);
   --surface-main-faint: rgba(93, 112, 82, 0.1);
   --surface-main-xfaint: rgba(93, 112, 82, 0.08);
+  --surface-selection-active: #5d7052;
+  --surface-selection-active-hover: rgba(255, 255, 255, 0.14);
+  --surface-selection-inactive: rgba(120, 120, 108, 0.16);
+  --surface-selection-inactive-hover: rgba(120, 120, 108, 0.22);
   --surface-accent-soft: rgba(193, 140, 93, 0.14);
   --surface-user-soft: rgba(193, 140, 93, 0.22);
   --surface-table-head: rgba(93, 112, 82, 0.06);
   --border-soft: rgba(93, 112, 82, 0.2);
   --border-strong: rgba(93, 112, 82, 0.3);
+  --border-selection-active: rgba(255, 255, 255, 0.2);
+  --border-selection-inactive: rgba(120, 120, 108, 0.28);
   --border-subtle: rgba(93, 112, 82, 0.12);
   --border-faint: rgba(93, 112, 82, 0.08);
   --border-floating: rgba(93, 112, 82, 0.24);
@@ -108,7 +115,8 @@
   --text-main: #ffffff;
   --text-body: #e2e8f0;
   --text-muted: #94a3b8;
-  --text-contrast: #ffffff;
+  --text-contrast: #1a1404;
+  --text-selection-active: #1a1404;
   --text-secondary: #ffd600;
   --surface-editor: #030304;
   --surface-base: #0f1115;
@@ -124,11 +132,17 @@
   --surface-main-soft: rgba(247, 147, 26, 0.16);
   --surface-main-faint: rgba(247, 147, 26, 0.12);
   --surface-main-xfaint: rgba(247, 147, 26, 0.09);
+  --surface-selection-active: #f7931a;
+  --surface-selection-active-hover: rgba(255, 255, 255, 0.14);
+  --surface-selection-inactive: rgba(148, 163, 184, 0.18);
+  --surface-selection-inactive-hover: rgba(148, 163, 184, 0.24);
   --surface-accent-soft: rgba(234, 88, 12, 0.16);
   --surface-user-soft: rgba(247, 147, 26, 0.22);
   --surface-table-head: rgba(247, 147, 26, 0.09);
   --border-soft: rgba(255, 255, 255, 0.14);
   --border-strong: rgba(247, 147, 26, 0.54);
+  --border-selection-active: rgba(255, 255, 255, 0.24);
+  --border-selection-inactive: rgba(148, 163, 184, 0.3);
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-faint: rgba(255, 255, 255, 0.05);
   --border-floating: rgba(247, 147, 26, 0.34);
@@ -440,73 +454,6 @@ input:focus-visible {
 
 .mono-label {
   font-family: "JetBrains Mono", ui-monospace, monospace;
-}
-
-.note-body-editor .tiptap {
-  min-height: 380px;
-  color: var(--text-body);
-  line-height: 1.75;
-  outline: none;
-}
-
-.note-body-editor .tiptap p {
-  margin-top: 0;
-  margin-bottom: 1rem;
-}
-
-.note-body-editor .tiptap ul,
-.note-body-editor .tiptap ol {
-  margin: 0 0 1rem;
-  padding-left: 1.25rem;
-}
-
-.note-body-editor .tiptap .tableWrapper {
-  margin: 0 0 1.5rem;
-  overflow-x: auto;
-}
-
-.note-body-editor .tiptap table {
-  width: 100%;
-  min-width: 32rem;
-  border-collapse: collapse;
-  border-spacing: 0;
-  table-layout: fixed;
-}
-
-.note-body-editor .tiptap th,
-.note-body-editor .tiptap td {
-  border: 1px solid var(--border-soft);
-  padding: 0.9rem 1rem;
-  vertical-align: top;
-  text-align: left;
-}
-
-.note-body-editor .tiptap th {
-  background: var(--surface-table-head);
-  color: var(--text-main);
-  font-weight: 600;
-}
-
-.note-body-editor .tiptap td {
-  background: var(--surface-base);
-}
-
-.note-body-editor .tiptap .selectedCell::after {
-  pointer-events: none;
-  position: absolute;
-  inset: 0;
-  border: 2px solid var(--main);
-  content: "";
-}
-
-.note-body-editor .tiptap .selectedCell {
-  position: relative;
-}
-
-.note-body-editor .tiptap mark {
-  background: rgba(193, 140, 93, 0.28);
-  border-radius: 0.2em;
-  color: inherit;
 }
 
 @keyframes lock-pulse {

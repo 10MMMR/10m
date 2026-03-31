@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { EditorPane } from "./editor-pane";
 
 jest.mock("@tiptap/extension-table", () => ({
@@ -32,6 +32,13 @@ type MockChain = {
   toggleUnderline: () => MockChain;
   toggleHighlight: () => MockChain;
   toggleBulletList: () => MockChain;
+  toggleOrderedList: () => MockChain;
+  updateAttributes: (
+    type: string,
+    attributes: Record<string, string | null | boolean>,
+  ) => MockChain;
+  setTextAlign: (value: string) => MockChain;
+  setLineHeight: (value: string) => MockChain;
   setFontSize: (value: string) => MockChain;
   insertTable: (options?: { rows?: number; cols?: number; withHeaderRow?: boolean }) => MockChain;
   addRowBefore: () => MockChain;
@@ -46,14 +53,20 @@ type MockChain = {
 };
 
 type MockEditor = {
+  __testAppendToBullet: (text: string) => void;
+  __testAppendToTableCell: (text: string) => void;
   can: () => {
     chain: () => MockChain;
   };
   chain: () => MockChain;
   commands: {
     setContent: (content: string, options?: { emitUpdate?: boolean }) => void;
+    updateAttributes: (
+      type: string,
+      attributes: Record<string, string | null | boolean>,
+    ) => void;
   };
-  getAttributes: () => { fontSize: string };
+  getAttributes: (name?: string) => Record<string, string | null | boolean>;
   getHTML: () => string;
   isActive: (name: string) => boolean;
   off: (event: string, callback: () => void) => void;
@@ -87,10 +100,14 @@ jest.mock("@tiptap/react", () => {
       highlight: false,
       html: initialContent,
       italic: false,
+      lineHeight: "1.5",
       table: false,
       tableCols: 0,
       tableHeader: false,
       tableRows: 0,
+      orderedList: false,
+      orderedListType: null as string | null,
+      textAlign: "left",
       underline: false,
       updateHandler: onUpdate,
       fontSize: "17px",
@@ -120,12 +137,48 @@ jest.mock("@tiptap/react", () => {
 
     const setTableContent = (content: string) => {
       state.html = content;
+      state.bulletList = content.includes("<ul") || content.includes("<ol");
+      state.orderedList = content.includes("<ol");
+      state.orderedListType = content.includes('<ol type="a">') ? "a" : null;
       state.table = content.includes("<table");
       state.tableHeader = content.includes("<th");
       state.tableRows = state.table ? Math.max((content.match(/<tr>/g) || []).length, 1) : 0;
       const headerCells = (content.match(/<th>/g) || []).length;
       const dataCells = (content.match(/<td>/g) || []).length;
       state.tableCols = state.table ? Math.max(headerCells, dataCells > 0 && state.tableRows > 0 ? dataCells / Math.max(state.tableRows - (state.tableHeader ? 1 : 0), 1) : 0, 1) : 0;
+    };
+
+    const syncOrderedListHtml = () => {
+      if (!state.orderedList) {
+        state.html = "<p>Ordered list removed</p>";
+        state.orderedListType = null;
+        return;
+      }
+
+      const typeAttribute =
+        state.orderedListType === "a" ? ' type="a"' : "";
+      state.html = `<ol${typeAttribute}><li><p>First item</p></li></ol>`;
+    };
+
+    const updateNodeAttributes = (
+      type: string,
+      attributes: Record<string, string | null | boolean>,
+    ) => {
+      if (type === "orderedList") {
+        state.orderedListType =
+          typeof attributes.type === "string" ? attributes.type : null;
+        syncOrderedListHtml();
+      }
+
+      if (type === "paragraph" || type === "heading") {
+        if (typeof attributes.textAlign === "string") {
+          state.textAlign = attributes.textAlign;
+        }
+
+        if (typeof attributes.lineHeight === "string") {
+          state.lineHeight = attributes.lineHeight;
+        }
+      }
     };
 
     const createChain = (mutates: boolean): MockChain => {
@@ -162,6 +215,26 @@ jest.mock("@tiptap/react", () => {
         toggleBulletList: () =>
           apply(true, () => {
             state.bulletList = !state.bulletList;
+          }),
+        toggleOrderedList: () =>
+          apply(true, () => {
+            state.orderedList = !state.orderedList;
+            if (state.orderedList) {
+              state.orderedListType ??= null;
+            }
+            syncOrderedListHtml();
+          }),
+        updateAttributes: (type, attributes) =>
+          apply(true, () => {
+            updateNodeAttributes(type, attributes);
+          }),
+        setTextAlign: (value) =>
+          apply(true, () => {
+            state.textAlign = value;
+          }),
+        setLineHeight: (value) =>
+          apply(true, () => {
+            state.lineHeight = value;
           }),
         setFontSize: (value: string) =>
           apply(true, () => {
@@ -233,6 +306,30 @@ jest.mock("@tiptap/react", () => {
     };
 
     const editor: MockEditor = {
+      __testAppendToBullet: (text) => {
+        if (state.html.includes("</p></li>")) {
+          state.html = state.html.replace("</p></li>", `${text}</p></li>`);
+        } else {
+          state.html = `<p>${text}</p>`;
+        }
+
+        state.bulletList = state.html.includes("<ul") || state.html.includes("<ol");
+        emit("transaction");
+        state.updateHandler?.({ editor });
+      },
+      __testAppendToTableCell: (text) => {
+        if (state.html.includes("</td>")) {
+          state.html = state.html.replace("</td>", `${text}</td>`);
+        } else if (state.html.includes("</th>")) {
+          state.html = state.html.replace("</th>", `${text}</th>`);
+        } else {
+          state.html = `<p>${text}</p>`;
+        }
+
+        state.table = state.html.includes("<table");
+        emit("transaction");
+        state.updateHandler?.({ editor });
+      },
       can: () => ({
         chain: () => createChain(false),
       }),
@@ -240,9 +337,32 @@ jest.mock("@tiptap/react", () => {
       commands: {
         setContent: (content) => {
           setTableContent(content);
+          emit("transaction");
+        },
+        updateAttributes: (type, attributes) => {
+          updateNodeAttributes(type, attributes);
+          emit("transaction");
+          state.updateHandler?.({ editor });
         },
       },
-      getAttributes: () => ({ fontSize: state.fontSize }),
+      getAttributes: (name) => {
+        if (name === "textStyle") {
+          return { fontSize: state.fontSize };
+        }
+
+        if (name === "orderedList") {
+          return { type: state.orderedListType };
+        }
+
+        if (name === "paragraph" || name === "heading") {
+          return {
+            lineHeight: state.lineHeight,
+            textAlign: state.textAlign,
+          };
+        }
+
+        return { fontSize: state.fontSize };
+      },
       getHTML: () => state.html,
       isActive: (name: string) => {
         if (name === "bold") return state.bold;
@@ -250,6 +370,7 @@ jest.mock("@tiptap/react", () => {
         if (name === "underline") return state.underline;
         if (name === "highlight") return state.highlight;
         if (name === "bulletList") return state.bulletList;
+        if (name === "orderedList") return state.orderedList;
         if (name === "table") return state.table;
         if (name === "tableHeader") return state.tableHeader;
         return false;
@@ -271,7 +392,26 @@ jest.mock("@tiptap/react", () => {
   }
 
   return {
-    EditorContent: () => <div data-testid="editor-content" />,
+    EditorContent: ({ editor }: { editor: MockEditor | null }) => (
+      <div>
+        <div data-testid="editor-content" />
+        <div data-testid="editor-html">{editor?.getHTML() ?? ""}</div>
+        <button
+          aria-label="Type in bullet item"
+          onClick={() => editor?.__testAppendToBullet("x")}
+          type="button"
+        >
+          Type in bullet item
+        </button>
+        <button
+          aria-label="Type in table cell"
+          onClick={() => editor?.__testAppendToTableCell("x")}
+          type="button"
+        >
+          Type in table cell
+        </button>
+      </div>
+    ),
     useEditor: (options?: { content?: string; onUpdate?: UpdateHandler }) => {
       const editorRef = React.useRef(null) as { current: MockEditor | null };
 
@@ -289,6 +429,7 @@ const defaultProps = {
   emptyStateTitle: "No note selected",
   isDirty: false,
   lockIn: false,
+  noteId: "note-1",
   note: {
     title: "My note",
     body: "<p>My note body</p>",
@@ -302,9 +443,25 @@ const defaultProps = {
   onToggleLockIn: jest.fn(),
 };
 
+function setToolbarWidth(width: number) {
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get: () => width,
+  });
+}
+
+function getDesktopTableMenu() {
+  return document.querySelector("[data-editor-table-menu]") as HTMLElement;
+}
+
+function getOverflowMenu() {
+  return document.querySelector("[data-editor-overflow-menu]") as HTMLElement;
+}
+
 describe("EditorPane", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    setToolbarWidth(0);
   });
 
   afterEach(() => {
@@ -315,12 +472,37 @@ describe("EditorPane", () => {
     render(
       <EditorPane
         {...defaultProps}
+        noteId={null}
         note={null}
       />,
     );
 
     expect(screen.getByText("No note selected")).toBeInTheDocument();
     expect(screen.getByText("Create a note from the left pane to start writing.")).toBeInTheDocument();
+  });
+
+  test("renders a pdf iframe when a file is selected", () => {
+    render(
+      <EditorPane
+        {...defaultProps}
+        noteId={null}
+        note={null}
+        pdfDocument={{
+          title: "Lecture packet",
+          dataUrl: "/api/storage/pdf?path=class%2Ffile.pdf",
+          mimeType: "application/pdf",
+          size: 512,
+          createdAt: "2025-01-01T00:00:00.000Z",
+          updatedAt: "2025-01-01T00:00:00.000Z",
+        }}
+      />,
+    );
+
+    expect(screen.getByTitle("Lecture packet")).toHaveAttribute(
+      "src",
+      "/api/storage/pdf?path=class%2Ffile.pdf",
+    );
+    expect(screen.queryByText("No note selected")).not.toBeInTheDocument();
   });
 
   test("disables toolbar controls when editing is locked", () => {
@@ -392,6 +574,47 @@ describe("EditorPane", () => {
     expect(onDelete).toHaveBeenCalledTimes(1);
   });
 
+  test("switches between numbered and lettered ordered list modes", () => {
+    render(<EditorPane {...defaultProps} />);
+
+    const numberedButton = screen.getByRole("button", { name: "Numbered list" });
+    const letteredButton = screen.getByRole("button", { name: "Lettered list" });
+
+    fireEvent.mouseDown(numberedButton);
+    expect(numberedButton).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("editor-html")).toHaveTextContent(
+      "<ol><li><p>First item</p></li></ol>",
+    );
+
+    fireEvent.mouseDown(letteredButton);
+    expect(numberedButton).toHaveAttribute("aria-pressed", "false");
+    expect(letteredButton).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("editor-html")).toHaveTextContent(
+      '<ol type="a"><li><p>First item</p></li></ol>',
+    );
+
+    fireEvent.mouseDown(letteredButton);
+    expect(letteredButton).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("editor-html")).toHaveTextContent(
+      "<p>Ordered list removed</p>",
+    );
+  });
+
+  test("applies text alignment from the desktop menu", () => {
+    setToolbarWidth(1400);
+    render(<EditorPane {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Align text" }));
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Center" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Align text" }));
+
+    expect(screen.getByRole("button", { name: "Center" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   test("inserts a default table and triggers a debounced body update", () => {
     jest.useFakeTimers();
     const onBodyChange = jest.fn();
@@ -415,18 +638,21 @@ describe("EditorPane", () => {
   });
 
   test("enables table actions only when the selection is inside a table", () => {
+    setToolbarWidth(1400);
     render(<EditorPane {...defaultProps} />);
 
-    expect(screen.getAllByRole("button", { name: "Delete table" })[0]).toBeDisabled();
+    fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
+    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeDisabled();
 
     fireEvent.mouseDown(screen.getAllByRole("button", { name: "Insert table" })[0]);
 
-    expect(screen.getAllByRole("button", { name: "Delete table" })[0]).toBeEnabled();
-    expect(screen.getAllByRole("button", { name: "Add row above" })[0]).toBeEnabled();
+    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeEnabled();
+    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Add row above" })).toBeEnabled();
   });
 
   test("deletes a table and persists the updated html", () => {
     jest.useFakeTimers();
+    setToolbarWidth(1400);
     const onBodyChange = jest.fn();
 
     render(
@@ -440,13 +666,95 @@ describe("EditorPane", () => {
       />,
     );
 
-    fireEvent.mouseDown(screen.getAllByRole("button", { name: "Delete table" })[0]);
+    fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
+    fireEvent.mouseDown(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" }));
     jest.advanceTimersByTime(100);
 
     expect(onBodyChange).toHaveBeenCalledWith("<p>Table removed</p>");
   });
 
+  test("opens the desktop table dropdown and runs table actions", () => {
+    jest.useFakeTimers();
+    setToolbarWidth(1400);
+    const onBodyChange = jest.fn();
+
+    render(
+      <EditorPane
+        {...defaultProps}
+        onBodyChange={onBodyChange}
+      />,
+    );
+
+    fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
+    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Add row above" })).toBeDisabled();
+
+    fireEvent.mouseDown(within(getDesktopTableMenu()).getByRole("button", { name: "Insert table" }));
+    jest.advanceTimersByTime(100);
+
+    expect(onBodyChange).toHaveBeenLastCalledWith(
+      "<table><tbody><tr><th>Header 1</th><th>Header 2</th><th>Header 3</th></tr><tr><td>Cell 1-1</td><td>Cell 1-2</td><td>Cell 1-3</td></tr><tr><td>Cell 2-1</td><td>Cell 2-2</td><td>Cell 2-3</td></tr></tbody></table>",
+    );
+    expect(within(getDesktopTableMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
+  });
+
+  test("opens compact overflow on click and keeps table actions out of the root list", () => {
+    render(<EditorPane {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "More tools" }));
+
+    expect(within(getOverflowMenu()).getByRole("button", { name: "Table" })).toBeInTheDocument();
+    expect(within(getOverflowMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
+    expect(within(getOverflowMenu()).queryByRole("button", { name: "Delete table" })).not.toBeInTheDocument();
+  });
+
+  test("opens the compact table side submenu on hover and runs table actions", () => {
+    jest.useFakeTimers();
+    const onBodyChange = jest.fn();
+
+    render(
+      <EditorPane
+        {...defaultProps}
+        onBodyChange={onBodyChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "More tools" }));
+    fireEvent.mouseEnter(within(getOverflowMenu()).getByRole("button", { name: "Table" }));
+
+    expect(within(getOverflowMenu()).getByRole("button", { name: "Insert table" })).toBeInTheDocument();
+
+    fireEvent.mouseDown(within(getOverflowMenu()).getByRole("button", { name: "Insert table" }));
+    jest.advanceTimersByTime(100);
+
+    expect(onBodyChange).toHaveBeenLastCalledWith(
+      "<table><tbody><tr><th>Header 1</th><th>Header 2</th><th>Header 3</th></tr><tr><td>Cell 1-1</td><td>Cell 1-2</td><td>Cell 1-3</td></tr><tr><td>Cell 2-1</td><td>Cell 2-2</td><td>Cell 2-3</td></tr></tbody></table>",
+    );
+    expect(screen.queryByRole("button", { name: "More tools" })).toBeInTheDocument();
+    expect(within(getOverflowMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
+  });
+
+  test("closes desktop and compact menus on outside click", () => {
+    setToolbarWidth(1400);
+    const { rerender } = render(<EditorPane {...defaultProps} />);
+
+    fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
+    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Add row above" })).toBeInTheDocument();
+
+    fireEvent.click(document.body);
+    expect(within(getDesktopTableMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
+
+    setToolbarWidth(0);
+    rerender(<EditorPane {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "More tools" }));
+    expect(within(getOverflowMenu()).getByRole("button", { name: "Bullet list" })).toBeInTheDocument();
+
+    fireEvent.click(document.body);
+    expect(within(getOverflowMenu()).queryByRole("button", { name: "Bullet list" })).not.toBeInTheDocument();
+  });
+
   test("keeps table controls disabled when editing is locked", () => {
+    setToolbarWidth(1400);
     render(
       <EditorPane
         {...defaultProps}
@@ -455,14 +763,17 @@ describe("EditorPane", () => {
     );
 
     expect(screen.getAllByRole("button", { name: "Insert table" })[0]).toBeDisabled();
-    expect(screen.getAllByRole("button", { name: "Delete table" })[0]).toBeDisabled();
+    fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
+    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeDisabled();
   });
 
   test("does not reapply stale note html after a local table edit", () => {
+    setToolbarWidth(1400);
     const { rerender } = render(<EditorPane {...defaultProps} />);
 
     fireEvent.mouseDown(screen.getAllByRole("button", { name: "Insert table" })[0]);
-    expect(screen.getAllByRole("button", { name: "Delete table" })[0]).toBeEnabled();
+    fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
+    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeEnabled();
 
     rerender(
       <EditorPane
@@ -474,6 +785,152 @@ describe("EditorPane", () => {
       />,
     );
 
-    expect(screen.getAllByRole("button", { name: "Delete table" })[0]).toBeEnabled();
+    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeEnabled();
+  });
+
+  test("keeps typing inside the same bullet item across same-note rerenders", () => {
+    jest.useFakeTimers();
+    const onBodyChange = jest.fn();
+    const listNote = {
+      ...defaultProps.note,
+      body: "<ul><li><p>Alpha</p></li></ul>",
+    };
+    const { rerender } = render(
+      <EditorPane
+        {...defaultProps}
+        note={listNote}
+        onBodyChange={onBodyChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Type in bullet item" }));
+    jest.advanceTimersByTime(100);
+
+    rerender(
+      <EditorPane
+        {...defaultProps}
+        note={{
+          ...listNote,
+          updatedAt: "2025-01-01T00:00:01.000Z",
+        }}
+        onBodyChange={onBodyChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Type in bullet item" }));
+    jest.advanceTimersByTime(100);
+
+    expect(screen.getByTestId("editor-html")).toHaveTextContent(
+      "<ul><li><p>Alphaxx</p></li></ul>",
+    );
+    expect(onBodyChange).toHaveBeenLastCalledWith("<ul><li><p>Alphaxx</p></li></ul>");
+  });
+
+  test("keeps typing inside the same table cell across same-note rerenders", () => {
+    jest.useFakeTimers();
+    const onBodyChange = jest.fn();
+    const tableNote = {
+      ...defaultProps.note,
+      body: "<table><tbody><tr><td>Cell</td></tr></tbody></table>",
+    };
+    const { rerender } = render(
+      <EditorPane
+        {...defaultProps}
+        note={tableNote}
+        onBodyChange={onBodyChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Type in table cell" }));
+    jest.advanceTimersByTime(100);
+
+    rerender(
+      <EditorPane
+        {...defaultProps}
+        note={{
+          ...tableNote,
+          updatedAt: "2025-01-01T00:00:01.000Z",
+        }}
+        onBodyChange={onBodyChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Type in table cell" }));
+    jest.advanceTimersByTime(100);
+
+    expect(screen.getByTestId("editor-html")).toHaveTextContent(
+      "<table><tbody><tr><td>Cellxx</td></tr></tbody></table>",
+    );
+    expect(onBodyChange).toHaveBeenLastCalledWith(
+      "<table><tbody><tr><td>Cellxx</td></tr></tbody></table>",
+    );
+  });
+
+  test("loads a newly selected note body and clears the editor when selection resets", () => {
+    const { rerender } = render(<EditorPane {...defaultProps} />);
+
+    expect(screen.getByTestId("editor-html")).toHaveTextContent("<p>My note body</p>");
+
+    rerender(
+      <EditorPane
+        {...defaultProps}
+        noteId="note-2"
+        note={{
+          ...defaultProps.note,
+          body: "<p>Second note body</p>",
+          title: "Second note",
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("editor-html")).toHaveTextContent("<p>Second note body</p>");
+
+    rerender(
+      <EditorPane
+        {...defaultProps}
+        noteId={null}
+        note={null}
+      />,
+    );
+
+    expect(screen.queryByTestId("editor-html")).not.toBeInTheDocument();
+    expect(screen.getByText("No note selected")).toBeInTheDocument();
+  });
+
+  test("clears a pending body update when switching notes", () => {
+    jest.useFakeTimers();
+    const onBodyChange = jest.fn();
+    const listNote = {
+      ...defaultProps.note,
+      body: "<ul><li><p>Alpha</p></li></ul>",
+    };
+    const { rerender } = render(
+      <EditorPane
+        {...defaultProps}
+        note={listNote}
+        onBodyChange={onBodyChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Type in bullet item" }));
+
+    rerender(
+      <EditorPane
+        {...defaultProps}
+        noteId="note-2"
+        note={{
+          ...defaultProps.note,
+          title: "Second note",
+          body: "<p>Second note body</p>",
+          updatedAt: "2025-01-01T00:00:02.000Z",
+        }}
+        onBodyChange={onBodyChange}
+      />,
+    );
+
+    jest.advanceTimersByTime(100);
+
+    expect(onBodyChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId("editor-html")).toHaveTextContent("<p>Second note body</p>");
   });
 });

@@ -1,5 +1,9 @@
 "use client";
 
+import { Table } from "@tiptap/extension-table";
+import TableCell from "@tiptap/extension-table-cell";
+import TableHeader from "@tiptap/extension-table-header";
+import TableRow from "@tiptap/extension-table-row";
 import Highlight from "@tiptap/extension-highlight";
 import { FontSize, TextStyle } from "@tiptap/extension-text-style";
 import Underline from "@tiptap/extension-underline";
@@ -62,6 +66,17 @@ type ToolbarAction =
   | "lineSpacing"
   | "preview";
 
+type TableAction =
+  | "insertTable"
+  | "addRowBefore"
+  | "addRowAfter"
+  | "deleteRow"
+  | "addColumnBefore"
+  | "addColumnAfter"
+  | "deleteColumn"
+  | "toggleHeaderRow"
+  | "deleteTable";
+
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 40;
 const DEFAULT_FONT_SIZE = 17;
@@ -96,6 +111,7 @@ export function EditorPane({
 }: EditorPaneProps) {
   const toolbarRowRef = useRef<HTMLDivElement>(null);
   const bodyUpdateTimeoutRef = useRef<number | null>(null);
+  const lastLocalBodyRef = useRef(note?.body ?? "<p></p>");
   const [useCompactToolbar, setUseCompactToolbar] = useState(false);
   const [editorRevision, setEditorRevision] = useState(0);
   const canEdit = Boolean(note) && !lockIn;
@@ -107,6 +123,13 @@ export function EditorPane({
       Highlight.configure({ multicolor: false }),
       TextStyle,
       FontSize,
+      Table.configure({
+        renderWrapper: true,
+        resizable: false,
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
     ],
     content: note?.body ?? "<p></p>",
     immediatelyRender: false,
@@ -117,6 +140,7 @@ export function EditorPane({
       }
 
       const body = currentEditor.getHTML();
+      lastLocalBodyRef.current = body;
       bodyUpdateTimeoutRef.current = window.setTimeout(() => {
         onBodyChange(body);
       }, 100);
@@ -185,11 +209,17 @@ export function EditorPane({
     }
 
     if (!note) {
+      lastLocalBodyRef.current = "<p></p>";
       editor.commands.setContent("<p></p>", { emitUpdate: false });
       return;
     }
 
+    if (note.body === lastLocalBodyRef.current) {
+      return;
+    }
+
     if (editor.getHTML() !== note.body) {
+      lastLocalBodyRef.current = note.body;
       editor.commands.setContent(note.body, { emitUpdate: false });
     }
   }, [editor, note]);
@@ -204,6 +234,8 @@ export function EditorPane({
         underline: editor ? editor.isActive("underline") : false,
         highlight: editor ? editor.isActive("highlight") : false,
         bulletList: editor ? editor.isActive("bulletList") : false,
+        table: editor ? editor.isActive("table") : false,
+        tableHeader: editor ? editor.isActive("tableHeader") : false,
         fontSize: editor
           ? Number.parseFloat(editor.getAttributes("textStyle").fontSize || "") ||
             DEFAULT_FONT_SIZE
@@ -258,6 +290,195 @@ export function EditorPane({
     const nextFontSize = Math.min(MAX_FONT_SIZE, Math.round(toolbarState.fontSize) + 1);
     editor.chain().focus().setFontSize(`${nextFontSize}px`).run();
   };
+
+  const canRunTableAction = (action: TableAction) => {
+    if (!editor || !canEdit) {
+      return false;
+    }
+
+    const chain = editor.can().chain().focus();
+
+    if (action === "insertTable") {
+      return chain
+        .insertTable({
+          rows: 3,
+          cols: 3,
+          withHeaderRow: true,
+        })
+        .run();
+    }
+
+    if (action === "addRowBefore") return chain.addRowBefore().run();
+    if (action === "addRowAfter") return chain.addRowAfter().run();
+    if (action === "deleteRow") return chain.deleteRow().run();
+    if (action === "addColumnBefore") return chain.addColumnBefore().run();
+    if (action === "addColumnAfter") return chain.addColumnAfter().run();
+    if (action === "deleteColumn") return chain.deleteColumn().run();
+    if (action === "toggleHeaderRow") return chain.toggleHeaderRow().run();
+    if (action === "deleteTable") return chain.deleteTable().run();
+
+    return false;
+  };
+
+  const runTableCommand = (
+    event: MouseEvent<HTMLButtonElement>,
+    action: TableAction,
+  ) => {
+    event.preventDefault();
+
+    if (!editor || !canEdit) {
+      return;
+    }
+
+    const chain = editor.chain().focus();
+
+    if (action === "insertTable") {
+      chain
+        .insertTable({
+          rows: 3,
+          cols: 3,
+          withHeaderRow: true,
+        })
+        .run();
+      return;
+    }
+
+    if (action === "addRowBefore") chain.addRowBefore().run();
+    if (action === "addRowAfter") chain.addRowAfter().run();
+    if (action === "deleteRow") chain.deleteRow().run();
+    if (action === "addColumnBefore") chain.addColumnBefore().run();
+    if (action === "addColumnAfter") chain.addColumnAfter().run();
+    if (action === "deleteColumn") chain.deleteColumn().run();
+    if (action === "toggleHeaderRow") chain.toggleHeaderRow().run();
+    if (action === "deleteTable") chain.deleteTable().run();
+  };
+
+  const tableControlClass = ({
+    active = false,
+    disabled = false,
+    destructive = false,
+  }: {
+    active?: boolean;
+    disabled?: boolean;
+    destructive?: boolean;
+  }) => {
+    if (disabled) {
+      return "flex w-full cursor-not-allowed items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-(--text-muted) opacity-45";
+    }
+
+    if (active) {
+      return "flex w-full items-center gap-2 rounded-xl bg-(--main) px-3 py-2 text-left text-sm text-(--text-contrast) transition-colors duration-150 hover:bg-(--main-deep)";
+    }
+
+    if (destructive) {
+      return "flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-red-600 transition-colors duration-150 hover:bg-red-50";
+    }
+
+    return "flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-soft)";
+  };
+
+  const tableMenu = (
+    <div className="w-52 rounded-2xl border border-(--border-soft) bg-(--surface-base) p-1.5 shadow-(--shadow-floating)">
+      <button
+        className={tableControlClass({ disabled: !canRunTableAction("insertTable") })}
+        type="button"
+        aria-label="Insert table"
+        aria-disabled={!canRunTableAction("insertTable")}
+        disabled={!canRunTableAction("insertTable")}
+        onMouseDown={(event) => runTableCommand(event, "insertTable")}
+      >
+        <TableCellsIcon className="h-4 w-4" aria-hidden="true" />
+        Insert 3x3 table
+      </button>
+      <button
+        className={tableControlClass({ disabled: !canRunTableAction("addRowBefore") })}
+        type="button"
+        aria-label="Add row above"
+        aria-disabled={!canRunTableAction("addRowBefore")}
+        disabled={!canRunTableAction("addRowBefore")}
+        onMouseDown={(event) => runTableCommand(event, "addRowBefore")}
+      >
+        Add row above
+      </button>
+      <button
+        className={tableControlClass({ disabled: !canRunTableAction("addRowAfter") })}
+        type="button"
+        aria-label="Add row below"
+        aria-disabled={!canRunTableAction("addRowAfter")}
+        disabled={!canRunTableAction("addRowAfter")}
+        onMouseDown={(event) => runTableCommand(event, "addRowAfter")}
+      >
+        Add row below
+      </button>
+      <button
+        className={tableControlClass({ disabled: !canRunTableAction("deleteRow") })}
+        type="button"
+        aria-label="Delete row"
+        aria-disabled={!canRunTableAction("deleteRow")}
+        disabled={!canRunTableAction("deleteRow")}
+        onMouseDown={(event) => runTableCommand(event, "deleteRow")}
+      >
+        Delete row
+      </button>
+      <button
+        className={tableControlClass({ disabled: !canRunTableAction("addColumnBefore") })}
+        type="button"
+        aria-label="Add column left"
+        aria-disabled={!canRunTableAction("addColumnBefore")}
+        disabled={!canRunTableAction("addColumnBefore")}
+        onMouseDown={(event) => runTableCommand(event, "addColumnBefore")}
+      >
+        Add column left
+      </button>
+      <button
+        className={tableControlClass({ disabled: !canRunTableAction("addColumnAfter") })}
+        type="button"
+        aria-label="Add column right"
+        aria-disabled={!canRunTableAction("addColumnAfter")}
+        disabled={!canRunTableAction("addColumnAfter")}
+        onMouseDown={(event) => runTableCommand(event, "addColumnAfter")}
+      >
+        Add column right
+      </button>
+      <button
+        className={tableControlClass({ disabled: !canRunTableAction("deleteColumn") })}
+        type="button"
+        aria-label="Delete column"
+        aria-disabled={!canRunTableAction("deleteColumn")}
+        disabled={!canRunTableAction("deleteColumn")}
+        onMouseDown={(event) => runTableCommand(event, "deleteColumn")}
+      >
+        Delete column
+      </button>
+      <button
+        className={tableControlClass({
+          active: toolbarState.tableHeader,
+          disabled: !canRunTableAction("toggleHeaderRow"),
+        })}
+        type="button"
+        aria-label="Toggle header row"
+        aria-pressed={toolbarState.tableHeader}
+        aria-disabled={!canRunTableAction("toggleHeaderRow")}
+        disabled={!canRunTableAction("toggleHeaderRow")}
+        onMouseDown={(event) => runTableCommand(event, "toggleHeaderRow")}
+      >
+        Toggle header row
+      </button>
+      <button
+        className={tableControlClass({
+          destructive: true,
+          disabled: !canRunTableAction("deleteTable"),
+        })}
+        type="button"
+        aria-label="Delete table"
+        aria-disabled={!canRunTableAction("deleteTable")}
+        disabled={!canRunTableAction("deleteTable")}
+        onMouseDown={(event) => runTableCommand(event, "deleteTable")}
+      >
+        Delete table
+      </button>
+    </div>
+  );
 
   const decreaseFontSize = (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -378,14 +599,24 @@ export function EditorPane({
             <PhotoIcon className="h-5 w-5" aria-hidden="true" />
           </button>
           <button
-            className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({ disabled: true })}`}
+            className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
+              disabled: !canRunTableAction("insertTable"),
+            })}`}
             type="button"
             aria-label="Insert table"
-            aria-disabled="true"
-            disabled
+            aria-disabled={!canRunTableAction("insertTable")}
+            disabled={!canRunTableAction("insertTable")}
+            onMouseDown={(event) => runTableCommand(event, "insertTable")}
           >
             <TableCellsIcon className="h-5 w-5" aria-hidden="true" />
           </button>
+          <details className={`relative ${useCompactToolbar ? "hidden" : "block"}`}>
+            <summary className="flex h-11 cursor-pointer list-none items-center gap-1.5 rounded-xl border border-transparent px-3 text-[15px] text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-soft)">
+              <span>Table</span>
+              <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+            </summary>
+            <div className="absolute top-[calc(100%+8px)] right-0 z-10">{tableMenu}</div>
+          </details>
           <button
             className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({ disabled: true })}`}
             type="button"
@@ -439,14 +670,102 @@ export function EditorPane({
                 Insert image
               </button>
               <button
-                className="flex w-full cursor-not-allowed items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-(--text-muted) opacity-45"
+                className={tableControlClass({ disabled: !canRunTableAction("insertTable") })}
                 type="button"
                 aria-label="Insert table"
-                aria-disabled="true"
-                disabled
+                aria-disabled={!canRunTableAction("insertTable")}
+                disabled={!canRunTableAction("insertTable")}
+                onMouseDown={(event) => runTableCommand(event, "insertTable")}
               >
                 <TableCellsIcon className="h-4 w-4" aria-hidden="true" />
-                Insert table
+                Insert 3x3 table
+              </button>
+              <button
+                className={tableControlClass({ disabled: !canRunTableAction("addRowBefore") })}
+                type="button"
+                aria-label="Add row above"
+                aria-disabled={!canRunTableAction("addRowBefore")}
+                disabled={!canRunTableAction("addRowBefore")}
+                onMouseDown={(event) => runTableCommand(event, "addRowBefore")}
+              >
+                Add row above
+              </button>
+              <button
+                className={tableControlClass({ disabled: !canRunTableAction("addRowAfter") })}
+                type="button"
+                aria-label="Add row below"
+                aria-disabled={!canRunTableAction("addRowAfter")}
+                disabled={!canRunTableAction("addRowAfter")}
+                onMouseDown={(event) => runTableCommand(event, "addRowAfter")}
+              >
+                Add row below
+              </button>
+              <button
+                className={tableControlClass({ disabled: !canRunTableAction("deleteRow") })}
+                type="button"
+                aria-label="Delete row"
+                aria-disabled={!canRunTableAction("deleteRow")}
+                disabled={!canRunTableAction("deleteRow")}
+                onMouseDown={(event) => runTableCommand(event, "deleteRow")}
+              >
+                Delete row
+              </button>
+              <button
+                className={tableControlClass({ disabled: !canRunTableAction("addColumnBefore") })}
+                type="button"
+                aria-label="Add column left"
+                aria-disabled={!canRunTableAction("addColumnBefore")}
+                disabled={!canRunTableAction("addColumnBefore")}
+                onMouseDown={(event) => runTableCommand(event, "addColumnBefore")}
+              >
+                Add column left
+              </button>
+              <button
+                className={tableControlClass({ disabled: !canRunTableAction("addColumnAfter") })}
+                type="button"
+                aria-label="Add column right"
+                aria-disabled={!canRunTableAction("addColumnAfter")}
+                disabled={!canRunTableAction("addColumnAfter")}
+                onMouseDown={(event) => runTableCommand(event, "addColumnAfter")}
+              >
+                Add column right
+              </button>
+              <button
+                className={tableControlClass({ disabled: !canRunTableAction("deleteColumn") })}
+                type="button"
+                aria-label="Delete column"
+                aria-disabled={!canRunTableAction("deleteColumn")}
+                disabled={!canRunTableAction("deleteColumn")}
+                onMouseDown={(event) => runTableCommand(event, "deleteColumn")}
+              >
+                Delete column
+              </button>
+              <button
+                className={tableControlClass({
+                  active: toolbarState.tableHeader,
+                  disabled: !canRunTableAction("toggleHeaderRow"),
+                })}
+                type="button"
+                aria-label="Toggle header row"
+                aria-pressed={toolbarState.tableHeader}
+                aria-disabled={!canRunTableAction("toggleHeaderRow")}
+                disabled={!canRunTableAction("toggleHeaderRow")}
+                onMouseDown={(event) => runTableCommand(event, "toggleHeaderRow")}
+              >
+                Toggle header row
+              </button>
+              <button
+                className={tableControlClass({
+                  destructive: true,
+                  disabled: !canRunTableAction("deleteTable"),
+                })}
+                type="button"
+                aria-label="Delete table"
+                aria-disabled={!canRunTableAction("deleteTable")}
+                disabled={!canRunTableAction("deleteTable")}
+                onMouseDown={(event) => runTableCommand(event, "deleteTable")}
+              >
+                Delete table
               </button>
               <button
                 className="flex w-full cursor-not-allowed items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-(--text-muted) opacity-45"

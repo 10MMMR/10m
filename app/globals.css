@@ -460,6 +460,49 @@ input:focus-visible {
   padding-left: 1.25rem;
 }
 
+.note-body-editor .tiptap .tableWrapper {
+  margin: 0 0 1.5rem;
+  overflow-x: auto;
+}
+
+.note-body-editor .tiptap table {
+  width: 100%;
+  min-width: 32rem;
+  border-collapse: collapse;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.note-body-editor .tiptap th,
+.note-body-editor .tiptap td {
+  border: 1px solid var(--border-soft);
+  padding: 0.9rem 1rem;
+  vertical-align: top;
+  text-align: left;
+}
+
+.note-body-editor .tiptap th {
+  background: var(--surface-table-head);
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+.note-body-editor .tiptap td {
+  background: var(--surface-base);
+}
+
+.note-body-editor .tiptap .selectedCell::after {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--main);
+  content: "";
+}
+
+.note-body-editor .tiptap .selectedCell {
+  position: relative;
+}
+
 .note-body-editor .tiptap mark {
   background: rgba(193, 140, 93, 0.28);
   border-radius: 0.2em;

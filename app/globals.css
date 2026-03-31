@@ -181,11 +181,7 @@ body {
   overflow-x: hidden;
   position: relative;
   line-height: 1.45;
-  font-family:
-    var(--font-body),
-    "Nunito",
-    system-ui,
-    sans-serif;
+  font-family: var(--font-body), "Nunito", system-ui, sans-serif;
 }
 
 body::before {
@@ -238,11 +234,7 @@ input:focus-visible {
 }
 
 .display-font {
-  font-family:
-    var(--font-display),
-    "Fraunces",
-    Georgia,
-    serif;
+  font-family: var(--font-display), "Fraunces", Georgia, serif;
 }
 
 .organic-blob-a {
@@ -401,26 +393,48 @@ input:focus-visible {
   background: var(--surface-main-soft);
 }
 
+.chat-popup-panel {
+  overflow: hidden;
+  transform-origin: bottom right;
+}
+
+.chat-popup-panel-enter {
+  animation: chat-popup-in 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (min-width: 768px) {
+  .chat-popup-panel {
+    height: 50vh;
+    min-height: 44rem;
+    width: 32vh;
+    min-width: 29rem;
+  }
+}
+
+@keyframes chat-popup-in {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .workspace-shell {
   height: 100dvh;
   overflow: hidden;
   overscroll-behavior: none;
   color: var(--text-main);
   background: var(--background);
-  font-family:
-    var(--font-body),
-    "Nunito",
-    system-ui,
-    sans-serif;
+  font-family: var(--font-body), "Nunito", system-ui, sans-serif;
 }
 
 .workspace-shell h1,
 .workspace-shell h2 {
-  font-family:
-    var(--font-display),
-    "Fraunces",
-    Georgia,
-    serif;
+  font-family: var(--font-display), "Fraunces", Georgia, serif;
   letter-spacing: -0.02em;
 }
 

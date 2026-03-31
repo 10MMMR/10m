@@ -13,6 +13,7 @@ import { usePathname } from "next/navigation";
 import { useState, type ComponentType, type SVGProps } from "react";
 import { SiteLogo } from "@/app/_components/site-logo";
 import { ThemeTogglePill } from "@/app/_components/theme-toggle-pill";
+import { ChatPopupToggle } from "./chat-popup-toggle";
 import { SidebarProfile } from "./sidebar-profile";
 
 const SIDEBAR_EXPANDED_REM = 20;
@@ -27,6 +28,7 @@ type SidebarItem = {
   href: string;
   label: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
+  match?: "exact" | "prefix";
 };
 
 const sidebarItems: SidebarItem[] = [
@@ -34,19 +36,20 @@ const sidebarItems: SidebarItem[] = [
     href: "/app",
     label: "Overview",
     icon: Squares2X2Icon,
+    match: "exact",
   },
   {
-    href: "/classes",
+    href: "/app/classes",
     label: "Classes",
     icon: AcademicCapIcon,
   },
   {
-    href: "/exams",
+    href: "/app/exams",
     label: "Mock Exams",
     icon: ClipboardDocumentCheckIcon,
   },
   {
-    href: "/calendar",
+    href: "/app/calendar",
     label: "Calendar",
     icon: CalendarDaysIcon,
   },
@@ -96,7 +99,9 @@ export function AppShell({ children }: AppShellProps) {
           <nav className='mt-8 space-y-2 pb-32'>
             {sidebarItems.map((item) => {
               const isActive =
-                pathname === item.href || pathname.startsWith(`${item.href}/`);
+                item.match === "exact"
+                  ? pathname === item.href
+                  : pathname === item.href || pathname.startsWith(`${item.href}/`);
               const Icon = item.icon;
 
               return (
@@ -131,6 +136,7 @@ export function AppShell({ children }: AppShellProps) {
       <main className='flex-1 overflow-y-auto'>
         <div className='h-full p-5 sm:p-8 lg:p-10'>{children}</div>
       </main>
+      <ChatPopupToggle />
     </div>
   );
 }

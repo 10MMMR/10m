@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ChangeEvent, type FormEvent } from "react";
 import {
   ArrowRightIcon,
   ChevronDownIcon,
@@ -13,9 +13,19 @@ type ChatPaneProps = {
   locked: boolean;
   onHide: () => void;
   messages: Message[];
+  inputValue: string;
+  onInputChange: (value: string) => void;
+  onSubmit: () => void;
 };
 
-export function ChatPane({ locked, onHide, messages }: ChatPaneProps) {
+export function ChatPane({
+  locked,
+  onHide,
+  messages,
+  inputValue,
+  onInputChange,
+  onSubmit,
+}: ChatPaneProps) {
   const messageListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -25,6 +35,15 @@ export function ChatPane({ locked, onHide, messages }: ChatPaneProps) {
 
     messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
   }, [messages.length]);
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSubmit();
+  };
+
+  const handleInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    onInputChange(event.target.value);
+  };
 
   return (
     <aside
@@ -96,7 +115,10 @@ export function ChatPane({ locked, onHide, messages }: ChatPaneProps) {
       />
 
       <div className="absolute right-4 bottom-4 left-4 z-20">
-        <div className="flex items-center gap-2.5 rounded-3xl border border-(--border-strong) bg-(--surface-input) p-2.5 shadow-lg backdrop-blur-lg">
+        <form
+          className="flex items-center gap-2.5 rounded-3xl border border-(--border-strong) bg-(--surface-input) p-2.5 shadow-lg backdrop-blur-lg"
+          onSubmit={handleSubmit}
+        >
           <button
             className="grid h-11 w-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
             type="button"
@@ -108,6 +130,8 @@ export function ChatPane({ locked, onHide, messages }: ChatPaneProps) {
             className="h-11 min-w-0 flex-1 border-0 bg-transparent text-(--text-main) outline-none"
             placeholder="Ask a question..."
             type="text"
+            value={inputValue}
+            onChange={handleInputChange}
           />
           <button
             className="grid h-11 w-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
@@ -118,12 +142,12 @@ export function ChatPane({ locked, onHide, messages }: ChatPaneProps) {
           </button>
           <button
             className="grid h-11 w-11 place-items-center rounded-full border border-(--border-strong) bg-(--main) text-(--text-contrast) shadow-(--shadow-accent) transition-all duration-200 hover:-translate-y-0.5 hover:shadow-(--shadow-accent-strong)"
-            type="button"
+            type="submit"
             aria-label="Send message"
           >
             <ArrowRightIcon className="h-5 w-5" aria-hidden="true" />
           </button>
-        </div>
+        </form>
         <div className="flex items-center justify-center gap-4 pt-2.5 text-[11px] text-(--text-muted)">
           <button className="border-0 bg-transparent text-inherit" type="button">
             Plugins

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WorkspaceShell } from "./workspace-shell";
 
 jest.mock("./topbar", () => ({
@@ -48,8 +48,9 @@ jest.mock("./editor-pane", () => ({
 
 describe("WorkspaceShell note flow", () => {
   let idCounter = 0;
+  let originalFetch: typeof globalThis.fetch | undefined;
   let confirmSpy: jest.SpyInstance<boolean, [message?: string | undefined]>;
-  let fetchSpy: jest.SpyInstance;
+  let fetchSpy: jest.Mock;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -59,15 +60,17 @@ describe("WorkspaceShell note flow", () => {
       () => `test-uuid-${++idCounter}`,
     );
     confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(true);
-    fetchSpy = jest.spyOn(globalThis, "fetch").mockResolvedValue({
+    originalFetch = globalThis.fetch;
+    fetchSpy = jest.fn().mockResolvedValue({
       json: async () => ({ ok: true }),
       ok: true,
     } as Response);
+    globalThis.fetch = fetchSpy as typeof fetch;
   });
 
   afterEach(() => {
     confirmSpy.mockRestore();
-    fetchSpy.mockRestore();
+    globalThis.fetch = originalFetch as typeof fetch;
   });
 
   const openRootAddMenu = () => {
@@ -123,7 +126,7 @@ describe("WorkspaceShell note flow", () => {
     createRootNote();
     createRootNote();
 
-    const notes = screen.getAllByRole("button", { name: "Untitled note" });
+    const notes = screen.getAllByRole("button", { name: /^Untitled note/ });
     fireEvent.click(notes[0]);
     fireEvent.click(notes[1], { ctrlKey: true });
 
@@ -131,7 +134,7 @@ describe("WorkspaceShell note flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     expect(confirmSpy).toHaveBeenCalledWith("Delete 2 selected item(s)?");
-    expect(screen.getAllByRole("button", { name: "Untitled note" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Untitled note/ })).toHaveLength(2);
   });
 
   test("shift-click delete uses the visible selection range", () => {
@@ -149,7 +152,7 @@ describe("WorkspaceShell note flow", () => {
     createRootNote();
     createRootNote();
 
-    const notes = screen.getAllByRole("button", { name: "Untitled note" });
+    const notes = screen.getAllByRole("button", { name: /^Untitled note/ });
     fireEvent.click(notes[0]);
     fireEvent.click(notes[2], { shiftKey: true });
 
@@ -157,7 +160,7 @@ describe("WorkspaceShell note flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     expect(confirmSpy).toHaveBeenCalledWith("Delete 3 selected item(s)?");
-    expect(screen.getAllByRole("button", { name: "Untitled note" })).toHaveLength(3);
+    expect(screen.getAllByRole("button", { name: /^Untitled note/ })).toHaveLength(3);
   });
 
   test("deleting a selected parent and child only cascades once from the parent", () => {
@@ -173,9 +176,10 @@ describe("WorkspaceShell note flow", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add item" })[1]);
     fireEvent.click(screen.getByRole("button", { name: "New note" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "" })[1]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Untitled folder" }));
-    fireEvent.click(screen.getByRole("button", { name: "Untitled note" }), {
+    fireEvent.click(screen.getByRole("button", { name: /^Untitled folder/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Untitled note/ }), {
       ctrlKey: true,
     });
 
@@ -185,8 +189,8 @@ describe("WorkspaceShell note flow", () => {
     expect(confirmSpy).toHaveBeenCalledWith(
       "Delete Untitled folder and 1 nested item(s)?",
     );
-    expect(screen.queryByRole("button", { name: "Untitled folder" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Untitled note" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Untitled folder/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Untitled note/ })).not.toBeInTheDocument();
   });
 
   test("deleting a folder removes stored PDFs from storage", async () => {
@@ -218,13 +222,20 @@ describe("WorkspaceShell note flow", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add item" })[1]);
     fireEvent.click(screen.getByRole("button", { name: "Upload file" }));
-    fireEvent.change(input, {
-      target: {
-        files: [pdf],
-      },
+    await act(async () => {
+      fireEvent.change(input, {
+        target: {
+          files: [pdf],
+        },
+      });
     });
 
-    expect(await screen.findByRole("button", { name: "lesson-notes.pdf" })).toBeInTheDocument();
+    await screen.findByText("Uploaded lesson-notes.pdf");
+    fireEvent.click(screen.getAllByRole("button", { name: "" })[1]);
+
+    expect(
+      await screen.findByRole("button", { name: /^lesson-notes\.pdf/ }),
+    ).toBeInTheDocument();
 
     fetchSpy.mockClear();
 
@@ -312,13 +323,18 @@ describe("WorkspaceShell note flow", () => {
 
     openRootAddMenu();
     fireEvent.click(screen.getByRole("button", { name: "Upload file" }));
-    fireEvent.change(input, {
-      target: {
-        files: [pdf],
-      },
+    await act(async () => {
+      fireEvent.change(input, {
+        target: {
+          files: [pdf],
+        },
+      });
     });
 
-    const fileRow = await screen.findByRole("button", { name: "lecture.pdf" });
+    await screen.findByText("Uploaded lecture.pdf");
+    fireEvent.click(screen.getAllByRole("button", { name: "" })[1]);
+
+    const fileRow = await screen.findByRole("button", { name: /^lecture\.pdf/ });
     expect(screen.getByText("Uploaded lecture.pdf")).toBeInTheDocument();
 
     fireEvent.click(fileRow);

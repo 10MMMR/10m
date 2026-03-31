@@ -165,6 +165,7 @@ jest.mock("@tiptap/react", () => {
       attributes: Record<string, string | null | boolean>,
     ) => {
       if (type === "orderedList") {
+        state.orderedList = true;
         state.orderedListType =
           typeof attributes.type === "string" ? attributes.type : null;
         syncOrderedListHtml();

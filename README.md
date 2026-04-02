@@ -65,10 +65,15 @@ Current transport actions:
 - `reply`
 - `generate_note`
 
-Current note operations exposed under `generate_note`:
+Current note-operation capability labels:
 
 - `create_new_note`
 - `overwrite_current_note`
+
+These are internal registry/prompt labels, not response payload values. On the wire, the assistant can only return:
+
+- `action: "reply"`
+- `action: "generate_note"` with `target: "current_note" | "new_note"`
 
 Unsupported requests must resolve to `reply`, not a new action. That includes requests such as:
 
@@ -97,6 +102,7 @@ Client flow:
 4. Gemini returns structured JSON.
 5. The server validates that JSON into an `AssistantCommand`.
 6. The client renders `assistant.message`.
+   - Assistant messages are rendered as Markdown in the chat pane.
 7. The client either:
    - stops if `action === "reply"`
    - triggers note generation if `action === "generate_note"`
@@ -156,8 +162,11 @@ Request body:
 
 Notes:
 
-- `messages` must be non-empty.
+- `messages` must be a non-empty array.
+- Each message must be `{ "role": "user" | "assistant", "content": string }`.
+- Empty or whitespace-only message content is rejected.
 - `draftContext` is optional.
+- `draftContext` must include non-empty `nodeId`, `title`, and `body` when provided.
 - `draftContext` only matters when the active source is the same note currently being edited.
 
 Response body:
@@ -190,12 +199,12 @@ Allowed assistant actions:
 - `reply`
 - `generate_note`
 
-Supported note operations inside `generate_note`:
+Internal note-operation capability labels referenced by prompts:
 
 - `create_new_note`
 - `overwrite_current_note`
 
-`generate_note` target values:
+Actual `generate_note` response field:
 
 - `current_note`
 - `new_note`
@@ -225,6 +234,13 @@ Request body:
 - `new_note`
 - `overwrite_note`
 
+Notes:
+
+- `sourceNodeIds` must be a non-empty array of valid node IDs.
+- `prompt` must be a non-empty string.
+- `targetNoteId` is optional, but must be a valid node ID when provided.
+- `draftContext` follows the same validation rules as `/api/chat`.
+
 Response body:
 
 ```json
@@ -250,6 +266,7 @@ Rules:
   - note title
   - note HTML body
 - PDFs are downloaded from Supabase Storage and sent to Gemini as `inlineData` parts with base64 content.
+- There is currently no documented request-size cap beyond the PDF upload limit, so context size scales with selected sources and message history.
 - If the active note has unsaved local edits, `draftContext` replaces the stored note title/body for that note during context construction.
 
 This means the model can reason over:
@@ -335,7 +352,7 @@ Optional AI environment variables:
 - `AI_PROVIDER`
   - defaults to `gemini`
 - `AI_REQUIRE_AUTH`
-  - defaults to auth required unless explicitly set to `false`
+  - parsed by config today, but current AI routes still always require authenticated Supabase users
 
 Supabase-related environment variables used by the AI and storage flows:
 

@@ -5,21 +5,19 @@ let serverClient: SupabaseClient | null | undefined;
 function getSupabaseServerConfig() {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const bucket = process.env.SUPABASE_STORAGE_BUCKET;
 
-  if (!url || !serviceRoleKey || !bucket) {
+  if (!url || !serviceRoleKey) {
     return null;
   }
 
   return {
-    bucket,
     serviceRoleKey,
     url,
   };
 }
 
 export function getSupabaseStorageBucket() {
-  return getSupabaseServerConfig()?.bucket ?? null;
+  return process.env.SUPABASE_STORAGE_BUCKET ?? null;
 }
 
 export function getSupabaseServerClient() {

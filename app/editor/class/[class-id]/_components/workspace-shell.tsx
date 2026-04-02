@@ -1,6 +1,7 @@
 "use client";
 
 import { ChatBubbleLeftEllipsisIcon } from "@heroicons/react/24/outline";
+import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 import {
   useCallback,
   useEffect,
@@ -19,17 +20,30 @@ import {
 } from "./left-pane";
 import { Topbar } from "./topbar";
 import { getWorkspaceSeed, type Message } from "../_lib/workspace-data";
+import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
+import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
+import {
+  clearTreeUiState,
+  loadTreeUiState,
+  saveTreeUiState,
+} from "@/lib/tree-ui-state";
 import {
   canParentContainChild,
+  createNodeInTree,
   createTreeFolderNode,
   createTreeNoteNode,
-  LocalStorageTreeRepository,
+  deleteNodeCascadeFromTree,
+  moveNodeInTree,
   type DropPosition,
   type TreeNode,
   type TreeNodeKind,
+  updateNodeInTree,
 } from "@/lib/tree-repository";
 
 const MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024;
+const PDF_SIGNED_URL_TTL_SECONDS = 60 * 60;
+const AUTH_REQUIRED_MESSAGE = "Sign in with Google to access notes.";
+const STORAGE_NOT_CONFIGURED_MESSAGE = "Supabase storage is not configured.";
 const GENERATED_NOTE_HTML_BY_COMMAND: Record<string, string> = {
   gen1: `
     <h1>Computer Science Review Packet</h1>
@@ -189,12 +203,33 @@ const GENERATED_NOTE_HTML_BY_COMMAND: Record<string, string> = {
 type WorkspaceShellProps = {
   classId: string;
   requestedClassId: string;
+  storageBucket: string | null;
   usedFallback: boolean;
 };
 
 type UploadFeedback = {
   type: "success" | "error";
   message: string;
+};
+
+type DeleteConfirmationState = {
+  directDeleteIds: string[];
+  cascadeDeleteIds: string[];
+  message: string;
+};
+
+type UploadPdfResponse = {
+  error?: string;
+  fileNode?: TreeNode;
+  tree?: TreeNode[];
+};
+
+type DeletePdfResponse = {
+  error?: string;
+  orphanedPaths?: string[];
+  removedPaths?: string[];
+  tree?: TreeNode[];
+  treeUpdated?: boolean;
 };
 
 type SelectedPdfDocument = {
@@ -205,6 +240,8 @@ type SelectedPdfDocument = {
   createdAt: string;
   updatedAt: string;
 };
+
+type AuthStatus = "loading" | "signed-out" | "signed-in" | "unavailable";
 
 function getSelectableFiles(nodes: TreeNode[], selectedIds: string[]) {
   const selectedIdSet = new Set(selectedIds);
@@ -249,8 +286,21 @@ function isPdfFile(file: File) {
   return file.type === "application/pdf" || fileName.endsWith(".pdf");
 }
 
-function buildPdfViewerUrl(storagePath: string) {
-  return `/api/storage/pdf?path=${encodeURIComponent(storagePath)}`;
+function parentHasChildren(nodes: TreeNode[], parentId: string) {
+  return nodes.some((node) => node.parentId === parentId);
+}
+
+function collectAncestorIds(nodes: TreeNode[], nodeId: string) {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const expandedAncestorIds = new Set<string>();
+  let current = nodeMap.get(nodeId);
+
+  while (current?.parentId) {
+    expandedAncestorIds.add(current.parentId);
+    current = nodeMap.get(current.parentId);
+  }
+
+  return expandedAncestorIds;
 }
 
 function collectCascadeDeleteIds(nodes: TreeNode[], nodeIds: string[]) {
@@ -298,11 +348,16 @@ function collectCascadeDeleteIds(nodes: TreeNode[], nodeIds: string[]) {
 export function WorkspaceShell({
   classId,
   requestedClassId,
+  storageBucket,
   usedFallback,
 }: WorkspaceShellProps) {
   const workspace = getWorkspaceSeed(classId);
-  const treeRepository = useRef(new LocalStorageTreeRepository());
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const treeRepository = useRef<SupabaseTreeRepository | null>(
+    supabase ? new SupabaseTreeRepository(supabase) : null,
+  );
   const pdfUploadInputRef = useRef<HTMLInputElement>(null);
+  const treeNodesRef = useRef<TreeNode[]>([]);
   const [lockIn, setLockIn] = useState(false);
   const [isLeftPaneCollapsed, setIsLeftPaneCollapsed] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(true);
@@ -314,13 +369,23 @@ export function WorkspaceShell({
   const [selectedNodeKind, setSelectedNodeKind] = useState<TreeNodeKind | null>(null);
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
   const [draftNoteNode, setDraftNoteNode] = useState<TreeNode | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [isDirty, setIsDirty] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] =
+    useState<DeleteConfirmationState | null>(null);
   const [messages, setMessages] = useState<Message[]>(workspace.messages);
   const [chatInput, setChatInput] = useState("");
   const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(
     null,
   );
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(
+    supabase ? "loading" : "unavailable",
+  );
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [selectedPdfUrl, setSelectedPdfUrl] = useState<string | null>(null);
+  const pendingSignInUiResetUserIdRef = useRef<string | null>(null);
+  const restoredTreeUiStateKeyRef = useRef<string | null>(null);
   const [pendingUploadParentId, setPendingUploadParentId] = useState<string | null>(
     null,
   );
@@ -349,34 +414,80 @@ export function WorkspaceShell({
   );
 
   const activeEditorNote = selectedNodeKind === "note" ? draftNoteNode : null;
-  const activePdfDocument = useMemo(() => {
+  const selectedFileNode = useMemo(() => {
     if (selectedNodeKind !== "file" || !selectedNodeId) {
       return null;
     }
 
-    const selectedFileNode = treeNodes.find((node) => node.id === selectedNodeId);
-
-    if (!selectedFileNode) {
+    return treeNodes.find((node) => node.id === selectedNodeId) ?? null;
+  }, [selectedNodeId, selectedNodeKind, treeNodes]);
+  const activePdfDocument = useMemo(() => {
+    if (!selectedFileNode || !selectedPdfUrl) {
       return null;
     }
 
     return {
       title: selectedFileNode.title,
-      dataUrl: selectedFileNode.fileStoragePath
-        ? buildPdfViewerUrl(selectedFileNode.fileStoragePath)
-        : selectedFileNode.fileDataUrl,
+      dataUrl: selectedPdfUrl,
       mimeType: selectedFileNode.fileMimeType || "application/pdf",
       size: selectedFileNode.fileSize ?? null,
       createdAt: selectedFileNode.createdAt,
       updatedAt: selectedFileNode.updatedAt,
     } satisfies SelectedPdfDocument;
-  }, [selectedNodeId, selectedNodeKind, treeNodes]);
+  }, [selectedFileNode, selectedPdfUrl]);
 
-  const refreshTree = useCallback(() => {
-    const nodes = treeRepository.current.listTreeByClass(classId);
+  const resetWorkspaceState = useCallback(() => {
+    setTreeNodes([]);
+    setSelectedNodeIds([]);
+    setSelectedNodeId(null);
+    setSelectedNodeKind(null);
+    setSelectionAnchorId(null);
+    setDraftNoteNode(null);
+    setExpandedIds(new Set());
+    setSelectedPdfUrl(null);
+    setIsDirty(false);
+    setUploadFeedback(null);
+    setIsUploadingPdf(false);
+    setPendingUploadParentId(null);
+  }, []);
+
+  const refreshTree = useCallback(async () => {
+    if (!treeRepository.current || !authUser) {
+      resetWorkspaceState();
+      return [];
+    }
+
+    const nodes = await treeRepository.current.listTreeByClass(classId);
     setTreeNodes(nodes);
+    treeNodesRef.current = nodes;
     return nodes;
-  }, [classId]);
+  }, [authUser, classId, resetWorkspaceState]);
+
+  const persistTree = useCallback(
+    async (nextNodes: TreeNode[]) => {
+      if (!treeRepository.current || !authUser) {
+        throw new Error("Sign in with Google to save notes.");
+      }
+
+      const savedNodes = await treeRepository.current.replaceTree(classId, nextNodes);
+      setTreeNodes(savedNodes);
+      treeNodesRef.current = savedNodes;
+      return savedNodes;
+    },
+    [authUser, classId],
+  );
+
+  const getAccessToken = useCallback(async () => {
+    if (!supabase) {
+      return null;
+    }
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    return session?.access_token ?? null;
+  }, [supabase]);
 
   const syncSelectionState = useCallback(
     (nodes: TreeNode[], nextSelectedIds: string[], nextActiveId: string | null) => {
@@ -411,6 +522,69 @@ export function WorkspaceShell({
   );
 
   useEffect(() => {
+    treeNodesRef.current = treeNodes;
+  }, [treeNodes]);
+
+  useEffect(() => {
+    if (!deleteConfirmation) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDeleteConfirmation(null);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [deleteConfirmation]);
+
+  useEffect(() => {
+    if (!deleteConfirmation) {
+      return;
+    }
+
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = overflow;
+    };
+  }, [deleteConfirmation]);
+
+  useEffect(() => {
+    if (authStatus !== "signed-in") {
+      restoredTreeUiStateKeyRef.current = null;
+      return;
+    }
+  }, [authStatus]);
+
+  useEffect(() => {
+    if (!authUser || treeNodes.length === 0) {
+      return;
+    }
+
+    const restoreKey = `${authUser.id}:${classId}`;
+
+    if (restoredTreeUiStateKeyRef.current !== restoreKey) {
+      return;
+    }
+
+    if (pendingSignInUiResetUserIdRef.current === authUser.id) {
+      return;
+    }
+
+    saveTreeUiState(authUser.id, classId, {
+      expandedIds: Array.from(expandedIds),
+      selectedNodeId: selectedNodeId,
+    });
+  }, [authUser, classId, expandedIds, selectedNodeId, selectedNodeKind, treeNodes.length]);
+
+  useEffect(() => {
     const mobileQuery = window.matchMedia("(max-width: 767px)");
 
     const handleViewportChange = (event: MediaQueryListEvent) => {
@@ -443,19 +617,151 @@ export function WorkspaceShell({
   }, []);
 
   useEffect(() => {
-    refreshTree();
-    setSelectedNodeIds([]);
-    setSelectedNodeId(null);
-    setSelectedNodeKind(null);
-    setSelectionAnchorId(null);
-    setDraftNoteNode(null);
+    resetWorkspaceState();
     setIsDirty(false);
     setMessages(workspace.messages);
     setChatInput("");
-    setUploadFeedback(null);
-    setIsUploadingPdf(false);
-    setPendingUploadParentId(null);
-  }, [classId, refreshTree, workspace.messages]);
+  }, [classId, resetWorkspaceState, workspace.messages]);
+
+  useEffect(() => {
+    restoredTreeUiStateKeyRef.current = null;
+  }, [classId]);
+
+  useEffect(() => {
+    if (!supabase) {
+      return;
+    }
+
+    const syncAuthSession = (session: Session | null) => {
+      const nextUser = session?.user ?? null;
+      setAuthUser(nextUser);
+      setAuthStatus(nextUser ? "signed-in" : "signed-out");
+    };
+
+    void supabase.auth.getSession().then(({ data }) => {
+      syncAuthSession(data.session);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      (event: AuthChangeEvent, session: Session | null) => {
+        if (event === "SIGNED_IN" && session?.user?.id) {
+          pendingSignInUiResetUserIdRef.current = session.user.id;
+        }
+        syncAuthSession(session);
+      },
+    );
+
+    return () => subscription.unsubscribe();
+  }, [supabase]);
+
+  useEffect(() => {
+    if (authStatus !== "signed-in" || !authUser) {
+      return;
+    }
+
+    if (pendingSignInUiResetUserIdRef.current !== authUser.id) {
+      return;
+    }
+
+    clearTreeUiState(authUser.id, classId);
+    setExpandedIds(new Set());
+    pendingSignInUiResetUserIdRef.current = null;
+  }, [authStatus, authUser, classId]);
+
+  useEffect(() => {
+    if (authStatus !== "signed-in") {
+      resetWorkspaceState();
+      if (authStatus === "signed-out") {
+        setUploadFeedback({
+          type: "error",
+          message: AUTH_REQUIRED_MESSAGE,
+        });
+      }
+      return;
+    }
+
+    void refreshTree().catch((error) => {
+      resetWorkspaceState();
+      setUploadFeedback({
+        type: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to load notes from Supabase.",
+      });
+    });
+  }, [authStatus, refreshTree, resetWorkspaceState]);
+
+  useEffect(() => {
+    if (authStatus !== "signed-in" || !authUser || treeNodes.length === 0) {
+      return;
+    }
+
+    const restoreKey = `${authUser.id}:${classId}`;
+
+    if (restoredTreeUiStateKeyRef.current === restoreKey) {
+      return;
+    }
+
+    const persistedState = loadTreeUiState(authUser.id, classId);
+    const nodeIds = new Set(treeNodes.map((node) => node.id));
+    const nextExpandedIds = new Set(
+      persistedState.expandedIds.filter((nodeId) => nodeIds.has(nodeId)),
+    );
+
+    setExpandedIds(nextExpandedIds);
+    restoredTreeUiStateKeyRef.current = restoreKey;
+
+    if (!persistedState.selectedNodeId || !nodeIds.has(persistedState.selectedNodeId)) {
+      return;
+    }
+
+    const selectedNode = treeNodes.find(
+      (node) => node.id === persistedState.selectedNodeId,
+    );
+
+    if (!selectedNode) {
+      return;
+    }
+
+    syncSelectionState(treeNodes, [selectedNode.id], selectedNode.id);
+    setSelectionAnchorId(selectedNode.id);
+  }, [authStatus, authUser, classId, syncSelectionState, treeNodes]);
+
+  useEffect(() => {
+    if (!supabase || !storageBucket || !selectedFileNode?.fileStoragePath) {
+      setSelectedPdfUrl(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    void supabase.storage
+      .from(storageBucket)
+      .createSignedUrl(selectedFileNode.fileStoragePath, PDF_SIGNED_URL_TTL_SECONDS)
+      .then(({ data, error }) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (error || !data?.signedUrl) {
+          setSelectedPdfUrl(null);
+          setUploadFeedback({
+            type: "error",
+            message: "Unable to load PDF preview.",
+          });
+          return;
+        }
+
+        setSelectedPdfUrl(data.signedUrl);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFileNode, storageBucket, supabase]);
 
   const handleHideChat = () => {
     if (isChatOpen) {
@@ -522,34 +828,93 @@ export function WorkspaceShell({
     setSelectionAnchorId(anchorId);
   };
 
-  const createNoteUnderParent = (parentId: string) => {
-    const parentNode = treeNodes.find((node) => node.id === parentId);
+  const handleToggleExpanded = useCallback((nodeId: string) => {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
+      }
+
+      return next;
+    });
+  }, []);
+
+  const createNoteUnderParent = async (parentId: string) => {
+    if (!authUser) {
+      setUploadFeedback({
+        type: "error",
+        message: AUTH_REQUIRED_MESSAGE,
+      });
+      return;
+    }
+
+    const parentNode = treeNodesRef.current.find((node) => node.id === parentId);
 
     if (!parentNode || !canParentContainChild(parentNode.kind, "note")) {
       return;
     }
 
-    const created = treeRepository.current.createNode(createTreeNoteNode(classId, parentId));
-    const nextNodes = refreshTree();
-    syncSelectionState(nextNodes, [created.id], created.id);
-    setSelectionAnchorId(created.id);
-    setIsDirty(true);
+    const created = createTreeNoteNode(classId, parentId);
+    const nextNodes = createNodeInTree(treeNodesRef.current, created);
+    const shouldOpenParent = !parentHasChildren(treeNodesRef.current, parentId);
+
+    try {
+      const savedNodes = await persistTree(nextNodes);
+      const expandedAncestorIds = collectAncestorIds(savedNodes, created.id);
+      if (shouldOpenParent) {
+        expandedAncestorIds.add(parentId);
+      }
+      setExpandedIds((current) => new Set([...current, ...expandedAncestorIds]));
+      syncSelectionState(savedNodes, [created.id], created.id);
+      setSelectionAnchorId(created.id);
+      setIsDirty(true);
+    } catch (error) {
+      setUploadFeedback({
+        type: "error",
+        message:
+          error instanceof Error ? error.message : "Unable to create note.",
+      });
+    }
   };
 
-  const createFolderUnderParent = (parentId: string) => {
-    const parentNode = treeNodes.find((node) => node.id === parentId);
+  const createFolderUnderParent = async (parentId: string) => {
+    if (!authUser) {
+      setUploadFeedback({
+        type: "error",
+        message: AUTH_REQUIRED_MESSAGE,
+      });
+      return;
+    }
+
+    const parentNode = treeNodesRef.current.find((node) => node.id === parentId);
 
     if (!parentNode || !canParentContainChild(parentNode.kind, "folder")) {
       return;
     }
 
-    const created = treeRepository.current.createNode(
-      createTreeFolderNode(classId, parentId),
-    );
+    const created = createTreeFolderNode(classId, parentId);
+    const nextNodes = createNodeInTree(treeNodesRef.current, created);
+    const shouldOpenParent = !parentHasChildren(treeNodesRef.current, parentId);
 
-    const nextNodes = refreshTree();
-    syncSelectionState(nextNodes, [created.id], created.id);
-    setSelectionAnchorId(created.id);
+    try {
+      const savedNodes = await persistTree(nextNodes);
+      const expandedAncestorIds = collectAncestorIds(savedNodes, created.id);
+      if (shouldOpenParent) {
+        expandedAncestorIds.add(parentId);
+      }
+      setExpandedIds((current) => new Set([...current, ...expandedAncestorIds]));
+      syncSelectionState(savedNodes, [created.id], created.id);
+      setSelectionAnchorId(created.id);
+    } catch (error) {
+      setUploadFeedback({
+        type: "error",
+        message:
+          error instanceof Error ? error.message : "Unable to create folder.",
+      });
+    }
   };
 
   const handleCreateFolder = () => {
@@ -557,7 +922,7 @@ export function WorkspaceShell({
       return;
     }
 
-    createFolderUnderParent(rootNode.id);
+    void createFolderUnderParent(rootNode.id);
   };
 
   const triggerUploadUnderParent = (parentId: string) => {
@@ -574,20 +939,20 @@ export function WorkspaceShell({
 
   const handleAddAction = (nodeId: string, action: TreeAddAction) => {
     if (action === "note") {
-      createNoteUnderParent(nodeId);
+      void createNoteUnderParent(nodeId);
       return;
     }
 
     if (action === "folder") {
-      createFolderUnderParent(nodeId);
+      void createFolderUnderParent(nodeId);
       return;
     }
 
     triggerUploadUnderParent(nodeId);
   };
 
-  const handleMenuAction = (nodeId: string, action: TreeMenuAction) => {
-    const node = treeNodes.find((item) => item.id === nodeId);
+  const handleMenuAction = async (nodeId: string, action: TreeMenuAction) => {
+    const node = treeNodesRef.current.find((item) => item.id === nodeId);
 
     if (!node) {
       return;
@@ -595,7 +960,7 @@ export function WorkspaceShell({
 
     if (action === "add") {
       if (node.kind === "root" || node.kind === "folder" || node.kind === "file") {
-        createNoteUnderParent(node.id);
+        await createNoteUnderParent(node.id);
       }
       return;
     }
@@ -604,7 +969,10 @@ export function WorkspaceShell({
       const selectedIds = selectedNodeIds.includes(node.id)
         ? selectedNodeIds
         : [node.id];
-      const selectedFiles = getSelectableFiles(treeNodes, selectedIds).map((item) => ({
+      const selectedFiles = getSelectableFiles(
+        treeNodesRef.current,
+        selectedIds,
+      ).map((item) => ({
         id: item.id,
         title: item.title,
         kind: item.kind,
@@ -621,12 +989,12 @@ export function WorkspaceShell({
 
     const targetIds = selectedNodeIds.includes(node.id)
       ? selectedNodeIds.filter((selectedId) => {
-          const selectedNode = treeNodes.find((item) => item.id === selectedId);
+          const selectedNode = treeNodesRef.current.find((item) => item.id === selectedId);
           return selectedNode?.kind !== "root";
         })
       : [node.id];
     const { directDeleteIds, cascadeDeleteIds } = collectCascadeDeleteIds(
-      treeNodes,
+      treeNodesRef.current,
       targetIds,
     );
 
@@ -635,7 +1003,7 @@ export function WorkspaceShell({
     }
 
     const directDeleteNodes = directDeleteIds
-      .map((deleteId) => treeNodes.find((item) => item.id === deleteId))
+      .map((deleteId) => treeNodesRef.current.find((item) => item.id === deleteId))
       .filter((item): item is TreeNode => Boolean(item));
     const nestedDeleteCount = cascadeDeleteIds.length - directDeleteNodes.length;
     const confirmMessage =
@@ -647,44 +1015,94 @@ export function WorkspaceShell({
           ? `Delete ${directDeleteNodes.length} selected item(s) and ${nestedDeleteCount} nested item(s)?`
           : `Delete ${directDeleteNodes.length} selected item(s)?`;
 
-    if (!window.confirm(confirmMessage)) {
+    setDeleteConfirmation({
+      directDeleteIds,
+      cascadeDeleteIds,
+      message: confirmMessage,
+    });
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmation) {
       return;
     }
 
+    const { directDeleteIds, cascadeDeleteIds } = deleteConfirmation;
+    setDeleteConfirmation(null);
+
     const fileNodesToDelete = cascadeDeleteIds
-      .map((deleteId) => treeNodes.find((item) => item.id === deleteId))
+      .map((deleteId) => treeNodesRef.current.find((item) => item.id === deleteId))
       .filter(
         (item): item is TreeNode =>
           Boolean(item?.kind === "file" && item.fileStoragePath),
       );
 
-    fileNodesToDelete.forEach((fileNode) => {
-      if (!fileNode.fileStoragePath) {
-        return;
+    try {
+      let nextNodes = treeNodesRef.current;
+
+      if (fileNodesToDelete.length > 0) {
+        const accessToken = await getAccessToken();
+
+        if (!accessToken) {
+          throw new Error(AUTH_REQUIRED_MESSAGE);
+        }
+
+        const response = await fetch("/api/uploads/pdf", {
+          body: JSON.stringify({
+            classId,
+            nodeIds: directDeleteIds,
+          }),
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          method: "DELETE",
+        });
+        const payload = (await response.json().catch(() => null)) as DeletePdfResponse | null;
+
+        if (!response.ok) {
+          if (payload?.treeUpdated && payload.tree) {
+            setTreeNodes(payload.tree);
+            treeNodesRef.current = payload.tree;
+            nextNodes = payload.tree;
+          }
+
+          throw new Error(
+            payload?.orphanedPaths?.length
+              ? `${payload.error} Retry cleanup for ${payload.orphanedPaths.length} file(s).`
+              : payload?.error || "Unable to delete item.",
+          );
+        }
+
+        nextNodes = payload?.tree ?? [];
+      } else {
+        directDeleteIds.forEach((deleteId) => {
+          nextNodes = deleteNodeCascadeFromTree(nextNodes, classId, deleteId);
+        });
+
+        nextNodes = await persistTree(nextNodes);
       }
 
-      void fetch(`/api/storage/pdf?path=${encodeURIComponent(fileNode.fileStoragePath)}`, {
-        method: "DELETE",
+      const remainingSelectedIds = selectedNodeIds.filter((selectedId) =>
+        nextNodes.some((item) => item.id === selectedId),
+      );
+      const nextActiveId =
+        selectedNodeId && remainingSelectedIds.includes(selectedNodeId)
+          ? selectedNodeId
+          : remainingSelectedIds.at(-1) ?? null;
+
+      syncSelectionState(nextNodes, remainingSelectedIds, nextActiveId);
+
+      if (selectionAnchorId && !nextNodes.some((item) => item.id === selectionAnchorId)) {
+        setSelectionAnchorId(nextActiveId);
+      }
+    } catch (error) {
+      setUploadFeedback({
+        type: "error",
+        message:
+          error instanceof Error ? error.message : "Unable to delete item.",
       });
-    });
-
-    directDeleteIds.forEach((deleteId) => {
-      treeRepository.current.deleteNodeCascade(classId, deleteId);
-    });
-
-    const nextNodes = refreshTree();
-    const remainingSelectedIds = selectedNodeIds.filter((selectedId) =>
-      nextNodes.some((item) => item.id === selectedId),
-    );
-    const nextActiveId =
-      selectedNodeId && remainingSelectedIds.includes(selectedNodeId)
-        ? selectedNodeId
-        : remainingSelectedIds.at(-1) ?? null;
-
-    syncSelectionState(nextNodes, remainingSelectedIds, nextActiveId);
-
-    if (selectionAnchorId && !nextNodes.some((item) => item.id === selectionAnchorId)) {
-      setSelectionAnchorId(nextActiveId);
+      return;
     }
   };
 
@@ -703,8 +1121,21 @@ export function WorkspaceShell({
     targetNodeId: string,
     position: DropPosition,
   ) => {
-    treeRepository.current.moveNode(classId, dragNodeId, targetNodeId, position);
-    refreshTree();
+    const nextNodes = moveNodeInTree(
+      treeNodesRef.current,
+      classId,
+      dragNodeId,
+      targetNodeId,
+      position,
+    );
+
+    void persistTree(nextNodes).catch((error) => {
+      setUploadFeedback({
+        type: "error",
+        message:
+          error instanceof Error ? error.message : "Unable to move item.",
+      });
+    });
   };
 
   const handleUploadPdfFile = async (
@@ -733,53 +1164,65 @@ export function WorkspaceShell({
       return;
     }
 
+    if (!authUser) {
+      setUploadFeedback({
+        type: "error",
+        message: AUTH_REQUIRED_MESSAGE,
+      });
+      return;
+    }
+
+    if (!supabase || !storageBucket) {
+      setUploadFeedback({
+        type: "error",
+        message: STORAGE_NOT_CONFIGURED_MESSAGE,
+      });
+      return;
+    }
+
     setIsUploadingPdf(true);
     setUploadFeedback(null);
 
     try {
-      const timestamp = new Date().toISOString();
+      const accessToken = await getAccessToken();
+
+      if (!accessToken) {
+        throw new Error(AUTH_REQUIRED_MESSAGE);
+      }
+
       const formData = new FormData();
       formData.append("classId", classId);
+      formData.append("parentId", pendingUploadParentId);
       formData.append("file", file);
 
       const response = await fetch("/api/uploads/pdf", {
         body: formData,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
         method: "POST",
       });
+      const payload = (await response.json().catch(() => null)) as UploadPdfResponse | null;
 
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as
-          | { error?: string }
-          | null;
-
+      if (!response.ok || !payload?.tree || !payload.fileNode) {
         throw new Error(payload?.error || "Unable to upload PDF to Supabase Storage.");
       }
-      const payload = (await response.json()) as {
-        fileId: string;
-        mimeType: string;
-        size: number;
-        storagePath: string;
-        title: string;
-      };
 
-      treeRepository.current.createNode({
-        id: payload.fileId,
-        classId,
-        parentId: pendingUploadParentId,
-        kind: "file",
-        title: payload.title,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        fileDataUrl: buildPdfViewerUrl(payload.storagePath),
-        fileStoragePath: payload.storagePath,
-        fileMimeType: payload.mimeType,
-        fileSize: payload.size,
-      });
-
-      refreshTree();
+      const shouldOpenParent = !parentHasChildren(treeNodesRef.current, pendingUploadParentId);
+      const savedNodes = payload.tree;
+      const fileId = payload.fileNode.id;
+      setTreeNodes(savedNodes);
+      treeNodesRef.current = savedNodes;
+      const expandedAncestorIds = collectAncestorIds(savedNodes, fileId);
+      if (shouldOpenParent) {
+        expandedAncestorIds.add(pendingUploadParentId);
+      }
+      setExpandedIds((current) => new Set([...current, ...expandedAncestorIds]));
+      syncSelectionState(savedNodes, [fileId], fileId);
+      setSelectionAnchorId(fileId);
       setUploadFeedback({
         type: "success",
-        message: `Uploaded ${payload.title}`,
+        message: `Uploaded ${file.name}`,
       });
     } catch (error) {
       setUploadFeedback({
@@ -819,18 +1262,28 @@ export function WorkspaceShell({
     });
   };
 
-  const handleSaveNote = () => {
+  const handleSaveNote = async () => {
     if (!draftNoteNode || draftNoteNode.kind !== "note") {
       return;
     }
 
-    treeRepository.current.updateNode({
-      ...draftNoteNode,
-      body: draftNoteNode.body || "<p></p>",
-    });
+    try {
+      const savedNodes = await persistTree(
+        updateNodeInTree(treeNodesRef.current, {
+          ...draftNoteNode,
+          body: draftNoteNode.body || "<p></p>",
+        }),
+      );
 
-    refreshTree();
-    setIsDirty(false);
+      syncSelectionState(savedNodes, [draftNoteNode.id], draftNoteNode.id);
+      setIsDirty(false);
+    } catch (error) {
+      setUploadFeedback({
+        type: "error",
+        message:
+          error instanceof Error ? error.message : "Unable to save note.",
+      });
+    }
   };
 
   const handleDeleteCurrentNote = () => {
@@ -838,7 +1291,28 @@ export function WorkspaceShell({
       return;
     }
 
-    handleMenuAction(draftNoteNode.id, "delete");
+    void handleMenuAction(draftNoteNode.id, "delete");
+  };
+
+  const handleGoogleSignIn = () => {
+    if (!supabase) {
+      return;
+    }
+
+    void supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: window.location.href,
+      },
+    });
+  };
+
+  const handleSignOut = () => {
+    if (!supabase) {
+      return;
+    }
+
+    void supabase.auth.signOut();
   };
 
   const handleChatSubmit = () => {
@@ -886,6 +1360,15 @@ export function WorkspaceShell({
     setChatInput("");
   };
 
+  const authLabel =
+    authStatus === "loading"
+      ? "Checking auth..."
+      : authStatus === "unavailable"
+        ? "Supabase unavailable"
+        : authStatus === "signed-in"
+          ? authUser?.email || authUser?.id || "Signed in"
+          : "Continue with Google";
+
   return (
     <main className="workspace-shell flex h-screen flex-col overflow-hidden">
       <Topbar
@@ -895,6 +1378,11 @@ export function WorkspaceShell({
         workspaceName={workspace.workspaceName}
         classLabel={workspace.classLabel}
         lockIn={lockIn}
+        isAuthReady={authStatus !== "loading" && authStatus !== "unavailable"}
+        isSignedIn={authStatus === "signed-in"}
+        authLabel={authLabel}
+        onSignIn={handleGoogleSignIn}
+        onSignOut={handleSignOut}
       />
       <input
         ref={pdfUploadInputRef}
@@ -920,6 +1408,7 @@ export function WorkspaceShell({
           onCollapse={() => setIsLeftPaneCollapsed(true)}
           onExpand={() => setIsLeftPaneCollapsed(false)}
           treeNodes={treeNodes}
+          expandedIds={expandedIds}
           selectedNodeIds={selectedNodeIds}
           selectedNodeId={selectedNodeId}
           classLabel={workspace.classLabel}
@@ -931,6 +1420,7 @@ export function WorkspaceShell({
           onAddAction={handleAddAction}
           onMenuAction={handleMenuAction}
           onPrepareRowMenu={handlePrepareRowMenu}
+          onToggleExpanded={handleToggleExpanded}
           onMoveNode={handleMoveNode}
         />
         <EditorPane
@@ -982,6 +1472,47 @@ export function WorkspaceShell({
         >
           <ChatBubbleLeftEllipsisIcon className="h-6 w-6" aria-hidden="true" />
         </button>
+      ) : null}
+
+      {deleteConfirmation ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-(--overlay-scrim) p-4 backdrop-blur-sm"
+          onClick={() => setDeleteConfirmation(null)}
+          role="dialog"
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-(--border-floating) bg-(--surface-base) p-6 shadow-(--shadow-floating)"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className="text-xs font-semibold uppercase tracking-widest text-(--text-muted)">
+              Confirm deletion
+            </p>
+            <h2 className="mt-3 text-2xl font-semibold leading-tight text-(--text-main)">
+              {deleteConfirmation.message}
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-(--text-body)">
+              This action permanently removes the selected note, folder, or file from
+              this class workspace.
+            </p>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                className="rounded-full border border-(--border-soft) bg-(--surface-input) px-5 py-2.5 text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)"
+                onClick={() => setDeleteConfirmation(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-full border border-(--destructive) bg-(--destructive) px-5 py-2.5 text-sm font-semibold text-(--destructive-foreground) transition-transform duration-200 hover:-translate-y-0.5"
+                onClick={() => void handleConfirmDelete()}
+                type="button"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </main>
   );

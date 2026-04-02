@@ -1,0 +1,337 @@
+.noteBodyEditor :global(.tiptap) {
+  min-height: 380px;
+  color: var(--text-body);
+  line-height: 1.5;
+  outline: none;
+}
+
+.noteBodyEditor :global(.tiptap p) {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+.noteBodyEditor :global(.tiptap ul),
+.noteBodyEditor :global(.tiptap ol) {
+  margin: 0 0 1rem;
+  padding-left: 1.5rem;
+}
+
+.noteBodyEditor :global(.tiptap ul) {
+  list-style-type: disc;
+}
+
+.noteBodyEditor :global(.tiptap ol) {
+  list-style-type: decimal;
+}
+
+.noteBodyEditor :global(.tiptap ol[type="a"]) {
+  list-style-type: lower-alpha;
+}
+
+.noteBodyEditor :global(.tiptap li::marker) {
+  color: var(--text-body);
+}
+
+.noteBodyEditor :global(.tiptap .tableWrapper) {
+  margin: 0 0 1.5rem;
+  overflow-x: auto;
+}
+
+.noteBodyEditor :global(.tiptap table) {
+  width: 100%;
+  min-width: 32rem;
+  border-collapse: collapse;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.noteBodyEditor :global(.tiptap th),
+.noteBodyEditor :global(.tiptap td) {
+  border: 1px solid var(--border-soft);
+  padding: 0.9rem 1rem;
+  vertical-align: top;
+  text-align: left;
+}
+
+.noteBodyEditor :global(.tiptap th) {
+  background: var(--surface-table-head);
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+.noteBodyEditor :global(.tiptap td) {
+  background: var(--surface-base);
+}
+
+.noteBodyEditor :global(.tiptap .selectedCell::after) {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--main);
+  content: "";
+}
+
+.noteBodyEditor :global(.tiptap .selectedCell) {
+  position: relative;
+}
+
+.noteBodyEditor :global(.tiptap mark) {
+  background: rgba(193, 140, 93, 0.28);
+  border-radius: 0.2em;
+  color: inherit;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-node) {
+  display: inline-flex;
+  vertical-align: middle;
+  margin: 0 0.2rem;
+  max-width: min(100%, 28rem);
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-editor-shell) {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  max-width: 100%;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-editor-host) {
+  display: inline-flex;
+  align-items: center;
+  min-width: 4rem;
+  min-height: 1.8rem;
+  max-width: 100%;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-field) {
+  display: inline-block;
+  min-width: 4rem;
+  max-width: min(100%, 26rem);
+  min-height: 1.5rem;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  outline: none;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-preview-button) {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: center;
+  transition: opacity 150ms ease;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-preview-button:hover) {
+  opacity: 0.9;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-preview-button-disabled) {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-preview) {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-node math-span),
+.noteBodyEditor :global(.tiptap .equation-block-node math-field) {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.noteBodyEditor :global(.tiptap .equation-block-empty-label) {
+  color: inherit;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+
+.equationPalette {
+  position: fixed;
+  z-index: 40;
+  width: min(44rem, calc(100vw - 2rem));
+  max-height: min(78vh, 48rem);
+  overflow: hidden;
+  border: 1px solid var(--border-floating);
+  border-radius: 1.75rem;
+  background: var(--surface-base);
+  box-shadow: var(--shadow-floating);
+}
+
+.equationPaletteHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-toolbar-float);
+  cursor: grab;
+  padding: 1rem 1.25rem 0.95rem;
+  touch-action: none;
+  user-select: none;
+}
+
+.equationPaletteTitle,
+.equationPaletteSubtitle,
+.equationPaletteSectionTitle {
+  margin: 0;
+}
+
+.equationPaletteTitle {
+  color: var(--text-main);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.equationPaletteSubtitle {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.equationPaletteClose {
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--surface-base);
+  color: var(--text-main);
+  cursor: pointer;
+  font: inherit;
+  padding: 0.55rem 0.95rem;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.equationPaletteClose:hover {
+  border-color: var(--border-floating);
+  background: var(--surface-main-xfaint);
+}
+
+.equationPaletteBody {
+  max-height: calc(min(78vh, 48rem) - 4.75rem);
+  overflow: auto;
+  padding: 1.2rem 1.25rem 1.35rem;
+}
+
+.equationPaletteSection + .equationPaletteSection {
+  margin-top: 1.15rem;
+}
+
+.equationPaletteSectionTitle {
+  color: var(--text-main);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.equationPaletteGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 0.7rem;
+}
+
+.equationSymbolChip {
+  display: flex;
+  min-height: 4.25rem;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--border-floating);
+  border-radius: 1.4rem;
+  background: var(--surface-main-soft);
+  color: var(--text-main);
+  cursor: pointer;
+  padding: 0.75rem 1rem;
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.equationSymbolChip:hover {
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+}
+
+.equationSymbolChip:disabled {
+  cursor: default;
+  opacity: 0.45;
+  transform: none;
+  box-shadow: none;
+}
+
+.equationSymbolChipWide {
+  grid-column: span 2;
+}
+
+.equationSymbolChipMain {
+  background: var(--surface-main-soft);
+  border-color: var(--border-floating);
+}
+
+.equationSymbolChipSoft {
+  background: var(--surface-user-soft);
+  border-color: var(--main);
+}
+
+.equationSymbolChipAccent {
+  background: var(--surface-accent-soft);
+  border-color: var(--secondary);
+}
+
+.equationSymbolChipSecondary {
+  background: var(--surface-main-faint);
+  border-color: var(--secondary-deep);
+}
+
+.equationSymbolChipWarm {
+  background: var(--surface-accent-soft);
+  border-color: var(--border-accent);
+}
+
+.equationSymbolChipMuted {
+  background: var(--surface-main-xfaint);
+  border-color: var(--border-soft);
+}
+
+.equationSymbolChipPreview {
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  .equationPalette {
+    width: min(32rem, calc(100vw - 1rem));
+  }
+
+  .equationPaletteGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

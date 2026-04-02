@@ -1,11 +1,6 @@
 import type { Metadata } from "next";
 import { WorkspaceShell } from "./_components/workspace-shell";
-import {
-  DEFAULT_CLASS_ID,
-  getWorkspaceSeed,
-  isSeededClassId,
-  normalizeClassId,
-} from "./_lib/workspace-data";
+import { DEFAULT_CLASS_ID, getWorkspaceSeed, normalizeClassId } from "./_lib/workspace-data";
 
 type EditorClassPageProps = {
   params: Promise<{ "class-id": string }>;
@@ -14,13 +9,11 @@ type EditorClassPageProps = {
 function resolveSeed(requestedClassId: string) {
   const normalizedClassId = normalizeClassId(requestedClassId);
   const classId = normalizedClassId || DEFAULT_CLASS_ID;
-  const seededClassId = isSeededClassId(classId) ? classId : DEFAULT_CLASS_ID;
 
   return {
     classId,
     normalizedClassId,
-    seededClassId,
-    usedFallback: !isSeededClassId(classId),
+    usedFallback: requestedClassId !== classId,
     workspace: getWorkspaceSeed(classId),
   };
 }
@@ -42,11 +35,13 @@ export default async function EditorClassPage({
 }: EditorClassPageProps) {
   const { "class-id": requestedClassId } = await params;
   const { classId, usedFallback } = resolveSeed(requestedClassId);
+  const storageBucket = process.env.SUPABASE_STORAGE_BUCKET ?? null;
 
   return (
     <WorkspaceShell
       classId={classId}
       requestedClassId={requestedClassId}
+      storageBucket={storageBucket}
       usedFallback={usedFallback}
     />
   );

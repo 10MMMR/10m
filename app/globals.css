@@ -27,7 +27,8 @@
   --muted-foreground: #78786c;
   --border: #ded8cf;
   --card: #fefefa;
-  --destructive: #a85448;
+  --destructive: #e63c30;
+  --destructive-foreground: #ffffff;
   --ring: #5d7052;
 
   --main: var(--primary);
@@ -51,6 +52,7 @@
   --surface-toolbar-float: rgba(252, 250, 246, 0.76);
   --surface-editor-card: rgba(255, 255, 252, 0.7);
   --surface-input: rgba(253, 252, 248, 0.96);
+  --overlay-scrim: rgba(18, 18, 14, 0.38);
   --surface-main-soft: rgba(93, 112, 82, 0.14);
   --surface-main-faint: rgba(93, 112, 82, 0.1);
   --surface-main-xfaint: rgba(93, 112, 82, 0.08);
@@ -105,7 +107,8 @@
   --muted-foreground: #94a3b8;
   --border: #1e293b;
   --card: #0f1115;
-  --destructive: #f97316;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
   --ring: #f7931a;
 
   --main: var(--primary);
@@ -129,6 +132,7 @@
   --surface-toolbar-float: rgba(11, 13, 16, 0.84);
   --surface-editor-card: rgba(11, 13, 16, 0.84);
   --surface-input: rgba(3, 3, 4, 0.72);
+  --overlay-scrim: rgba(3, 3, 4, 0.58);
   --surface-main-soft: rgba(247, 147, 26, 0.16);
   --surface-main-faint: rgba(247, 147, 26, 0.12);
   --surface-main-xfaint: rgba(247, 147, 26, 0.09);

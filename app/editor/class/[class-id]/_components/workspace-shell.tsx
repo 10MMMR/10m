@@ -20,6 +20,7 @@ import {
 } from "./left-pane";
 import { Topbar } from "./topbar";
 import { getWorkspaceSeed, type Message } from "../_lib/workspace-data";
+import type { AssistantCommand } from "@/lib/ai/assistant-contract";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import {
@@ -44,161 +45,6 @@ const MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024;
 const PDF_SIGNED_URL_TTL_SECONDS = 60 * 60;
 const AUTH_REQUIRED_MESSAGE = "Sign in with Google to access notes.";
 const STORAGE_NOT_CONFIGURED_MESSAGE = "Supabase storage is not configured.";
-const GENERATED_NOTE_HTML_BY_COMMAND: Record<string, string> = {
-  gen1: `
-    <h1>Computer Science Review Packet</h1>
-    <p><strong>Topic focus:</strong> algorithms, systems thinking, data organization, and the tradeoffs that show up when software moves from toy problems to production constraints.</p>
-    <p><u>Core question:</u> how do we choose representations and processes that make programs both correct and efficient?</p>
-    <h2>1. Data Structures and Why They Matter</h2>
-    <p>Every data structure encodes a set of priorities. Arrays give fast indexed access, linked lists favor cheap local insertions, hash maps optimize expected lookup time, and trees help preserve ordering while keeping operations predictable.</p>
-    <ul>
-      <li><mark>Array:</mark> strong for contiguous storage and cache-friendly scans.</li>
-      <li><mark>Hash table:</mark> strong for average-case lookup, but depends on a sound hashing strategy.</li>
-      <li><mark>Balanced tree:</mark> useful when sorted traversal and logarithmic updates both matter.</li>
-      <li><mark>Graph:</mark> the right model when relationships matter more than linear order.</li>
-    </ul>
-    <h2>2. Complexity as a Design Lens</h2>
-    <p>Big-O notation does not tell the whole story, but it gives a disciplined way to compare growth. A linear scan can outperform a more complicated structure at small sizes, yet lose badly once inputs scale or queries become frequent.</p>
-    <table>
-      <tbody>
-        <tr>
-          <th>Operation</th>
-          <th>Common target</th>
-          <th>Typical structure</th>
-        </tr>
-        <tr>
-          <td>Search by key</td>
-          <td>Near constant time</td>
-          <td>Hash map</td>
-        </tr>
-        <tr>
-          <td>Maintain sorted order</td>
-          <td>Logarithmic update</td>
-          <td>Balanced tree</td>
-        </tr>
-        <tr>
-          <td>Traverse neighbors</td>
-          <td>Edge-aware exploration</td>
-          <td>Adjacency list graph</td>
-        </tr>
-      </tbody>
-    </table>
-    <h2>3. Algorithms Beyond Memorization</h2>
-    <p>Sorting, searching, and traversal patterns matter because they express broad ideas: divide and conquer, greedy local choice, dynamic programming, and state exploration under constraints.</p>
-    <ol>
-      <li><strong>Divide and conquer</strong> breaks a problem into smaller independent subproblems, then recombines answers.</li>
-      <li><strong>Greedy design</strong> commits to the best local choice when the structure of the problem guarantees global optimality.</li>
-      <li><strong>Dynamic programming</strong> stores overlapping subresults to avoid repeated work.</li>
-      <li><strong>Graph traversal</strong> models reachability, dependency, cost, and path quality.</li>
-    </ol>
-    <p>When studying algorithms, ask what state is being tracked, what invariant is preserved, and what work is repeated or avoided.</p>
-    <h2>4. Systems Perspective</h2>
-    <p>Computer science is not only about code syntax. It also covers how memory, storage, networking, and concurrency shape software behavior. A correct algorithm can still feel slow if it causes too many cache misses, excessive allocation, or blocking I/O.</p>
-    <p><strong>Takeaway:</strong> the best engineers match problem structure, data layout, and execution environment instead of optimizing a single metric in isolation.</p>
-  `.trim(),
-  gen2: `
-    <h1>Calculus II Study Notes</h1>
-    <p><strong>Topic focus:</strong> integration techniques, infinite processes, and the geometric meaning behind symbolic manipulation.</p>
-    <p>Calculus becomes easier when each method answers a specific question: what pattern does the integrand resemble, and what transformation makes it simpler?</p>
-    <h2>1. Choosing an Integration Strategy</h2>
-    <p>You should identify structure before computing. Some integrals collapse under substitution, others require repeated decomposition, and some are best approached through symmetry or comparison.</p>
-    <ul>
-      <li><mark>Substitution</mark> works when part of the expression behaves like the derivative of another part.</li>
-      <li><mark>Integration by parts</mark> helps when a product becomes simpler after differentiation of one factor.</li>
-      <li><mark>Partial fractions</mark> is essential for rational functions with factorable denominators.</li>
-      <li><mark>Trig identities</mark> help convert difficult powers and products into integrable forms.</li>
-    </ul>
-    <h2>2. Integration by Parts</h2>
-    <p>The formula <strong>∫u dv = uv - ∫v du</strong> is more than a mechanical trick. It moves complexity from one factor to another. A good choice of <strong>u</strong> usually simplifies under differentiation.</p>
-    <table>
-      <tbody>
-        <tr>
-          <th>Integrand type</th>
-          <th>Common choice for u</th>
-          <th>Reason</th>
-        </tr>
-        <tr>
-          <td>Polynomial times exponential</td>
-          <td>Polynomial</td>
-          <td>Repeated derivatives eventually vanish</td>
-        </tr>
-        <tr>
-          <td>Logarithm</td>
-          <td>Log term</td>
-          <td>Its derivative becomes simpler than the original function</td>
-        </tr>
-        <tr>
-          <td>Inverse trig</td>
-          <td>Inverse trig term</td>
-          <td>Differentiation produces an algebraic form</td>
-        </tr>
-      </tbody>
-    </table>
-    <h2>3. Infinite Series</h2>
-    <p>Series ask whether infinitely many terms can combine to a finite value. Convergence tests are tools for recognizing behavior, not isolated facts to memorize.</p>
-    <ol>
-      <li><strong>Geometric series:</strong> converges when the ratio magnitude is less than 1.</li>
-      <li><strong>p-series:</strong> converges when p is greater than 1.</li>
-      <li><strong>Alternating series:</strong> often converges when term magnitudes decrease to zero.</li>
-      <li><strong>Comparison and limit comparison:</strong> measure a new series against one you already understand.</li>
-    </ol>
-    <p><u>Warning:</u> a sequence approaching zero is necessary for convergence, but not sufficient. The harmonic series is the classic reminder.</p>
-    <h2>4. Polar and Parametric Thinking</h2>
-    <p>Some curves are easier to describe by motion or angle than by solving for y. Parametric and polar forms reveal structure that rectangular equations can hide, especially in loops, spirals, and symmetric regions.</p>
-    <p><strong>Takeaway:</strong> good calculus work depends on pattern recognition, geometric interpretation, and choosing the method that reduces complexity fastest.</p>
-  `.trim(),
-  gen3: `
-    <h1>Biology Deep Review</h1>
-    <p><strong>Topic focus:</strong> cell biology, genetics, metabolism, and the way biological systems coordinate information, matter, and energy across scales.</p>
-    <p><u>Guiding idea:</u> biology is easier to organize when you ask what a structure is made of, what process it performs, and how that process is regulated.</p>
-    <h2>1. Cells as Coordinated Systems</h2>
-    <p>The cell is not a random collection of organelles. It is a coordinated environment where membranes, transport systems, signaling molecules, and genetic instructions all interact to maintain function.</p>
-    <ul>
-      <li><mark>Nucleus:</mark> stores DNA and regulates gene access.</li>
-      <li><mark>Ribosome:</mark> translates RNA instructions into proteins.</li>
-      <li><mark>Mitochondrion:</mark> converts energy from food into ATP through respiration.</li>
-      <li><mark>Membrane:</mark> controls exchange and enables signaling across boundaries.</li>
-    </ul>
-    <h2>2. Information Flow: DNA to Trait</h2>
-    <p>Genes influence traits through expression, regulation, and interaction with the environment. DNA is transcribed into RNA, RNA is translated into proteins, and proteins shape structure, catalysis, and signaling.</p>
-    <table>
-      <tbody>
-        <tr>
-          <th>Stage</th>
-          <th>Main event</th>
-          <th>Biological importance</th>
-        </tr>
-        <tr>
-          <td>Replication</td>
-          <td>DNA copies itself</td>
-          <td>Preserves hereditary information</td>
-        </tr>
-        <tr>
-          <td>Transcription</td>
-          <td>RNA is synthesized from DNA</td>
-          <td>Creates a working copy of genetic instructions</td>
-        </tr>
-        <tr>
-          <td>Translation</td>
-          <td>Ribosomes assemble proteins</td>
-          <td>Connects coded information to cell function</td>
-        </tr>
-      </tbody>
-    </table>
-    <h2>3. Metabolism and Energy Transfer</h2>
-    <p>Metabolism includes all chemical reactions that sustain life. Catabolic pathways release energy by breaking molecules down, while anabolic pathways use energy to build the complex molecules cells need.</p>
-    <ol>
-      <li><strong>Glycolysis</strong> begins glucose breakdown in the cytoplasm.</li>
-      <li><strong>Citric acid cycle</strong> extracts high-energy electrons from carbon intermediates.</li>
-      <li><strong>Electron transport</strong> uses redox reactions and proton gradients to drive ATP synthesis.</li>
-      <li><strong>Photosynthesis</strong> captures light energy and stores it in chemical bonds.</li>
-    </ol>
-    <p><mark>Key connection:</mark> ATP links energy release to energy demand across nearly every cellular process.</p>
-    <h2>4. Homeostasis and Regulation</h2>
-    <p>Biological systems survive by sensing change and adjusting. Feedback loops regulate temperature, glucose, hormones, and many other variables. Negative feedback stabilizes a system, while positive feedback amplifies a process until a specific endpoint is reached.</p>
-    <p><strong>Takeaway:</strong> strong biology answers connect structure, mechanism, and regulation instead of listing isolated facts.</p>
-  `.trim(),
-};
 
 type WorkspaceShellProps = {
   classId: string;
@@ -241,6 +87,28 @@ type SelectedPdfDocument = {
   updatedAt: string;
 };
 
+type ChatRequestMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type DraftNoteContext = {
+  nodeId: string;
+  title: string;
+  body: string;
+};
+
+type ChatResponse = {
+  assistant?: AssistantCommand;
+  error?: string;
+};
+
+type GenerateNoteResponse = {
+  error?: string;
+  html?: string;
+  title?: string;
+};
+
 type AuthStatus = "loading" | "signed-out" | "signed-in" | "unavailable";
 
 function getSelectableFiles(nodes: TreeNode[], selectedIds: string[]) {
@@ -271,6 +139,15 @@ function createMessage(
     side,
     text,
   };
+}
+
+function toChatRequestMessages(messages: Message[]): ChatRequestMessage[] {
+  return messages
+    .map((message) => ({
+      role: message.side === "assistant" ? "assistant" : "user",
+      content: message.text.trim(),
+    }))
+    .filter((message) => message.content.length > 0);
 }
 
 function buildUpdatedNote(node: TreeNode, updates: Partial<Pick<TreeNode, "title" | "body">>) {
@@ -345,6 +222,41 @@ function collectCascadeDeleteIds(nodes: TreeNode[], nodeIds: string[]) {
   };
 }
 
+function buildGeneratedNoteTitle(sourceNodes: TreeNode[], overrideTitle?: string) {
+  if (overrideTitle?.trim()) {
+    return overrideTitle.trim();
+  }
+
+  const [firstNode] = sourceNodes;
+
+  if (!firstNode) {
+    return "Study Notes";
+  }
+
+  if (sourceNodes.length === 1) {
+    return `Study Notes - ${firstNode.title}`;
+  }
+
+  return `Study Notes - ${firstNode.title} + ${sourceNodes.length - 1} more`;
+}
+
+function buildGeneratingNoteHtml() {
+  return "<p><strong>Generating study notes...</strong></p><p>StudyAI is building a structured note from the selected material.</p>";
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function buildGenerationFailureHtml(message: string) {
+  return `<p><strong>Unable to generate note.</strong></p><p>${escapeHtml(message)}</p>`;
+}
+
 export function WorkspaceShell({
   classId,
   requestedClassId,
@@ -356,6 +268,7 @@ export function WorkspaceShell({
   const treeRepository = useRef<SupabaseTreeRepository | null>(
     supabase ? new SupabaseTreeRepository(supabase) : null,
   );
+  const chatAbortControllerRef = useRef<AbortController | null>(null);
   const pdfUploadInputRef = useRef<HTMLInputElement>(null);
   const treeNodesRef = useRef<TreeNode[]>([]);
   const [lockIn, setLockIn] = useState(false);
@@ -373,8 +286,9 @@ export function WorkspaceShell({
   const [isDirty, setIsDirty] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] =
     useState<DeleteConfirmationState | null>(null);
-  const [messages, setMessages] = useState<Message[]>(workspace.messages);
+  const [chatSessions, setChatSessions] = useState<Record<string, Message[]>>({});
   const [chatInput, setChatInput] = useState("");
+  const [isChatStreaming, setIsChatStreaming] = useState(false);
   const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(
     null,
   );
@@ -435,6 +349,21 @@ export function WorkspaceShell({
       updatedAt: selectedFileNode.updatedAt,
     } satisfies SelectedPdfDocument;
   }, [selectedFileNode, selectedPdfUrl]);
+  const activeAiContextId = selectedNodeKind === "note" || selectedNodeKind === "file"
+    ? selectedNodeId
+    : null;
+  const activeChatMessages = activeAiContextId ? (chatSessions[activeAiContextId] ?? []) : [];
+  const activeDraftContext = useMemo(() => {
+    if (!draftNoteNode || draftNoteNode.kind !== "note") {
+      return null;
+    }
+
+    return {
+      nodeId: draftNoteNode.id,
+      title: draftNoteNode.title,
+      body: draftNoteNode.body || "<p></p>",
+    } satisfies DraftNoteContext;
+  }, [draftNoteNode]);
 
   const resetWorkspaceState = useCallback(() => {
     setTreeNodes([]);
@@ -517,6 +446,16 @@ export function WorkspaceShell({
       }
 
       setIsDirty(false);
+    },
+    [],
+  );
+
+  const setMessagesForContext = useCallback(
+    (contextId: string, nextMessages: Message[]) => {
+      setChatSessions((current) => ({
+        ...current,
+        [contextId]: nextMessages,
+      }));
     },
     [],
   );
@@ -619,9 +558,27 @@ export function WorkspaceShell({
   useEffect(() => {
     resetWorkspaceState();
     setIsDirty(false);
-    setMessages(workspace.messages);
+    chatAbortControllerRef.current?.abort();
+    chatAbortControllerRef.current = null;
+    setChatSessions({});
     setChatInput("");
+    setIsChatStreaming(false);
   }, [classId, resetWorkspaceState, workspace.messages]);
+
+  useEffect(() => {
+    chatAbortControllerRef.current?.abort();
+    chatAbortControllerRef.current = null;
+    setChatInput("");
+    setIsChatStreaming(false);
+  }, [activeAiContextId]);
+
+  useEffect(
+    () => () => {
+      chatAbortControllerRef.current?.abort();
+      chatAbortControllerRef.current = null;
+    },
+    [],
+  );
 
   useEffect(() => {
     restoredTreeUiStateKeyRef.current = null;
@@ -842,7 +799,35 @@ export function WorkspaceShell({
     });
   }, []);
 
-  const createNoteUnderParent = async (parentId: string) => {
+  const persistNoteNode = useCallback(
+    async (node: TreeNode) => {
+      const savedNodes = await persistTree(updateNodeInTree(treeNodesRef.current, node));
+      syncSelectionState(savedNodes, [node.id], node.id);
+      setSelectionAnchorId(node.id);
+      setIsDirty(false);
+
+      return savedNodes.find((item) => item.id === node.id) ?? node;
+    },
+    [persistTree, syncSelectionState],
+  );
+
+  const setDraftNoteContent = useCallback((noteId: string, title: string, body: string) => {
+    setDraftNoteNode((current) => {
+      if (!current || current.kind !== "note" || current.id !== noteId) {
+        return current;
+      }
+
+      return buildUpdatedNote(current, { body, title });
+    });
+  }, []);
+
+  const createNoteUnderParent = async (
+    parentId: string,
+    options?: {
+      markDirty?: boolean;
+      title?: string;
+    },
+  ) => {
     if (!authUser) {
       setUploadFeedback({
         type: "error",
@@ -857,7 +842,11 @@ export function WorkspaceShell({
       return;
     }
 
-    const created = createTreeNoteNode(classId, parentId);
+    const created = createTreeNoteNode(
+      classId,
+      parentId,
+      options?.title?.trim() || "Untitled note",
+    );
     const nextNodes = createNodeInTree(treeNodesRef.current, created);
     const shouldOpenParent = !parentHasChildren(treeNodesRef.current, parentId);
 
@@ -870,7 +859,8 @@ export function WorkspaceShell({
       setExpandedIds((current) => new Set([...current, ...expandedAncestorIds]));
       syncSelectionState(savedNodes, [created.id], created.id);
       setSelectionAnchorId(created.id);
-      setIsDirty(true);
+      setIsDirty(options?.markDirty ?? true);
+      return savedNodes.find((node) => node.id === created.id) ?? created;
     } catch (error) {
       setUploadFeedback({
         type: "error",
@@ -878,6 +868,8 @@ export function WorkspaceShell({
           error instanceof Error ? error.message : "Unable to create note.",
       });
     }
+
+    return null;
   };
 
   const createFolderUnderParent = async (parentId: string) => {
@@ -951,6 +943,107 @@ export function WorkspaceShell({
     triggerUploadUnderParent(nodeId);
   };
 
+  const generateNoteFromSources = async ({
+    chatSeedMessages,
+    mode,
+    prompt,
+    sourceNodes,
+    targetNoteId,
+    title,
+  }: {
+    chatSeedMessages?: Message[];
+    mode: "new_note" | "overwrite_note";
+    prompt: string;
+    sourceNodes: TreeNode[];
+    targetNoteId?: string;
+    title?: string;
+  }) => {
+    if (!supabase || authStatus !== "signed-in") {
+      throw new Error("Sign in with Google to use AI note generation.");
+    }
+
+    if (!rootNode) {
+      throw new Error("Class root is unavailable.");
+    }
+
+    const accessToken = await getAccessToken();
+
+    if (!accessToken) {
+      throw new Error("Sign in with Google to use AI note generation.");
+    }
+
+    let effectiveMode = mode;
+    let targetNode =
+      effectiveMode === "overwrite_note" && targetNoteId
+        ? treeNodesRef.current.find((node) => node.id === targetNoteId) ?? null
+        : null;
+
+    const fallbackTitle =
+      targetNode?.kind === "note" && !title
+        ? targetNode.title
+        : buildGeneratedNoteTitle(sourceNodes, title);
+
+    if (!targetNode || targetNode.kind !== "note") {
+      effectiveMode = "new_note";
+      targetNode = await createNoteUnderParent(rootNode.id, {
+        markDirty: false,
+        title: fallbackTitle,
+      });
+
+      if (!targetNode || targetNode.kind !== "note") {
+        throw new Error("Unable to create a note for AI generation.");
+      }
+
+      if (chatSeedMessages) {
+        setMessagesForContext(targetNode.id, chatSeedMessages);
+      }
+    }
+
+    const generatingBody = buildGeneratingNoteHtml();
+    setDraftNoteContent(targetNode.id, fallbackTitle, generatingBody);
+    setIsDirty(false);
+
+    const response = await fetch("/api/notes/generate", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        classId,
+        draftContext:
+          activeDraftContext &&
+          sourceNodes.some((node) => node.id === activeDraftContext.nodeId)
+            ? activeDraftContext
+            : null,
+        mode: effectiveMode,
+        prompt,
+        sourceNodeIds: sourceNodes.map((node) => node.id),
+        targetNoteId: targetNode.id,
+        title: fallbackTitle,
+      }),
+    });
+    const payload = (await response.json().catch(() => null)) as GenerateNoteResponse | null;
+
+    if (!response.ok || !payload?.html) {
+      const errorMessage = payload?.error || "Unable to generate note.";
+      const failedNode = buildUpdatedNote(targetNode, {
+        body: buildGenerationFailureHtml(errorMessage),
+        title: fallbackTitle,
+      });
+      await persistNoteNode(failedNode);
+      throw new Error(errorMessage);
+    }
+
+    const completedNode = buildUpdatedNote(targetNode, {
+      body: payload.html,
+      title: payload.title?.trim() || fallbackTitle,
+    });
+
+    await persistNoteNode(completedNode);
+    return completedNode;
+  };
+
   const handleMenuAction = async (nodeId: string, action: TreeMenuAction) => {
     const node = treeNodesRef.current.find((item) => item.id === nodeId);
 
@@ -969,17 +1062,27 @@ export function WorkspaceShell({
       const selectedIds = selectedNodeIds.includes(node.id)
         ? selectedNodeIds
         : [node.id];
-      const selectedFiles = getSelectableFiles(
-        treeNodesRef.current,
-        selectedIds,
-      ).map((item) => ({
-        id: item.id,
-        title: item.title,
-        kind: item.kind,
-        parentId: item.parentId,
-      }));
+      const selectedSources = getSelectableFiles(treeNodesRef.current, selectedIds);
 
-      console.log("Selected files for note generation:", selectedFiles);
+      if (selectedSources.length === 0) {
+        return;
+      }
+
+      try {
+        await generateNoteFromSources({
+          mode: "new_note",
+          prompt:
+            "Create a premium-quality study note from the selected sources. Be concise, highly structured, exam-focused, and use tables or lists where they add clarity.",
+          sourceNodes: selectedSources,
+          title: buildGeneratedNoteTitle(selectedSources),
+        });
+      } catch (error) {
+        setUploadFeedback({
+          type: "error",
+          message:
+            error instanceof Error ? error.message : "Unable to generate note.",
+        });
+      }
       return;
     }
 
@@ -1315,49 +1418,109 @@ export function WorkspaceShell({
     void supabase.auth.signOut();
   };
 
-  const handleChatSubmit = () => {
+  const handleChatSubmit = async () => {
     const trimmedInput = chatInput.trim();
 
-    if (!trimmedInput) {
+    if (!trimmedInput || isChatStreaming || !activeAiContextId) {
       return;
     }
 
-    setMessages((current) => [...current, createMessage("user", trimmedInput)]);
+    const userMessage = createMessage("user", trimmedInput);
+    const sourceContextId = activeAiContextId;
+    const nextMessages = [...activeChatMessages, userMessage];
 
-    const normalizedInput = trimmedInput.toLowerCase();
-    const generatedNoteHtml = GENERATED_NOTE_HTML_BY_COMMAND[normalizedInput];
-
-    if (!generatedNoteHtml) {
-      setMessages((current) => [
-        ...current,
-        createMessage("assistant", 'Placeholder mode only supports the "gen1", "gen2", and "gen3" commands right now.'),
+    if (!supabase || authStatus !== "signed-in") {
+      setMessagesForContext(sourceContextId, [
+        ...nextMessages,
+        createMessage("assistant", "Sign in with Google to use the chat assistant."),
       ]);
       setChatInput("");
       return;
     }
 
-    if (!activeEditorNote || activeEditorNote.kind !== "note") {
-      setMessages((current) => [
-        ...current,
-        createMessage("assistant", "Select or create a note first, then try gen again."),
-      ]);
-      setChatInput("");
-      return;
-    }
+    setMessagesForContext(sourceContextId, nextMessages);
+    setChatInput("");
+    setIsChatStreaming(true);
 
-    setDraftNoteNode((current) => {
-      if (!current || current.kind !== "note") {
-        return current;
+    try {
+      const controller = new AbortController();
+      chatAbortControllerRef.current?.abort();
+      chatAbortControllerRef.current = controller;
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      const accessToken = session?.access_token;
+
+      if (!accessToken) {
+        throw new Error("Sign in with Google to use the chat assistant.");
       }
 
-      return buildUpdatedNote(current, { body: generatedNoteHtml });
-    });
-    setIsDirty(true);
-    setMessages((current) => [
-      ...current,
-      createMessage("assistant", `Generated placeholder HTML for ${normalizedInput} and replaced the current note draft.`),
-    ]);
-    setChatInput("");
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          activeNodeId: sourceContextId,
+          classId,
+          draftContext:
+            activeDraftContext?.nodeId === sourceContextId ? activeDraftContext : null,
+          messages: toChatRequestMessages(nextMessages),
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as ChatResponse | null;
+
+      if (!response.ok || !payload?.assistant) {
+        throw new Error(payload?.error || "Unable to contact the chat assistant.");
+      }
+      const assistantMessage = createMessage("assistant", payload.assistant.message);
+
+      if (payload.assistant.action === "reply") {
+        setMessagesForContext(sourceContextId, [...nextMessages, assistantMessage]);
+        return;
+      }
+
+      const sourceNodes = getSelectableFiles(treeNodesRef.current, [sourceContextId]);
+
+      if (sourceNodes.length === 0) {
+        throw new Error("No note or PDF is available for note generation.");
+      }
+
+      const shouldOverwriteCurrent =
+        payload.assistant.target === "current_note" && selectedNodeKind === "note";
+
+      if (shouldOverwriteCurrent) {
+        setMessagesForContext(sourceContextId, [...nextMessages, assistantMessage]);
+      }
+
+      await generateNoteFromSources({
+        chatSeedMessages: shouldOverwriteCurrent ? undefined : [userMessage, assistantMessage],
+        mode: shouldOverwriteCurrent ? "overwrite_note" : "new_note",
+        prompt: payload.assistant.prompt,
+        sourceNodes,
+        targetNoteId: shouldOverwriteCurrent ? sourceContextId : undefined,
+        title: payload.assistant.title,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
+
+      console.error("[chat] request error:", error);
+      setUploadFeedback({
+        type: "error",
+        message:
+          error instanceof Error ? error.message : "Unable to contact the chat assistant.",
+      });
+    } finally {
+      chatAbortControllerRef.current = null;
+      setIsChatStreaming(false);
+    }
   };
 
   const authLabel =
@@ -1452,9 +1615,12 @@ export function WorkspaceShell({
         {isChatOpen ? (
           <div className="relative h-full min-h-0 min-w-0 overflow-hidden lg:col-span-2 xl:col-span-1">
             <ChatPane
+              disabled={!activeAiContextId}
+              disabledMessage="Open a note or PDF to chat with StudyAI."
               locked={lockIn}
+              isStreaming={isChatStreaming}
               onHide={handleHideChat}
-              messages={messages}
+              messages={activeChatMessages}
               inputValue={chatInput}
               onInputChange={setChatInput}
               onSubmit={handleChatSubmit}

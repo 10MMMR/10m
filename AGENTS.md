@@ -318,6 +318,15 @@ Agents should:
 
 - follow existing naming conventions
 - match formatting patterns
+- keep documentation aligned with the current implementation, not intentions
+
+---
+
+# README Writing Prompt
+
+When creating or rewriting `README.md`, use this prompt:
+
+`Write a README that is concise, technically precise, and easy to scan. Start with a table of contents. Document the system as it exists today, not as planned. Prefer short sections, explicit request/response contracts, concrete behavior rules, and implementation-relevant details over marketing copy. Explain the "why" only when it helps a reader understand the behavior or architecture. If the README covers AI features, include: entry points, routes, request payloads, response shapes, prompt behavior, context-building rules, fallback/error behavior, persistence rules, and any important constraints. Avoid filler, vague claims, and generic framework boilerplate.`
 - keep architectural decisions consistent
 
 Consistency across the codebase is more important than introducing new patterns.

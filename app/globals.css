@@ -259,6 +259,117 @@ input:focus-visible {
   border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%;
 }
 
+.chat-markdown {
+  color: var(--text-main);
+  font-size: 1rem;
+  line-height: 2rem;
+  word-break: break-word;
+}
+
+.chat-markdown > *:first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > *:last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown p,
+.chat-markdown ul,
+.chat-markdown ol,
+.chat-markdown pre,
+.chat-markdown blockquote,
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4 {
+  margin: 0 0 1rem;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4 {
+  color: var(--text-main);
+  font-family: var(--font-display), "Fraunces", Georgia, serif;
+  line-height: 1.2;
+}
+
+.chat-markdown h1 {
+  font-size: 1.75rem;
+}
+
+.chat-markdown h2 {
+  font-size: 1.45rem;
+}
+
+.chat-markdown h3 {
+  font-size: 1.2rem;
+}
+
+.chat-markdown h4 {
+  font-size: 1.05rem;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  padding-left: 1.5rem;
+}
+
+.chat-markdown li + li {
+  margin-top: 0.35rem;
+}
+
+.chat-markdown a {
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-accent);
+  text-underline-offset: 0.18em;
+}
+
+.chat-markdown strong {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.chat-markdown em {
+  font-style: italic;
+}
+
+.chat-markdown :not(pre) > code {
+  border: 1px solid var(--border-soft);
+  border-radius: 0.5rem;
+  background: var(--surface-panel-soft);
+  color: var(--text-secondary);
+  padding: 0.1rem 0.4rem;
+  font-size: 0.92em;
+}
+
+.chat-markdown pre {
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 1rem;
+  background: var(--surface-panel-strong);
+  box-shadow: var(--shadow-soft);
+  padding: 1rem 1.1rem;
+}
+
+.chat-markdown pre code {
+  border: 0;
+  background: transparent;
+  color: var(--text-main);
+  padding: 0;
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+
+.chat-markdown blockquote {
+  border-left: 3px solid var(--border-accent);
+  color: var(--text-muted);
+  margin-left: 0;
+  padding-left: 1rem;
+}
+
 .organic-blob-b {
   border-radius: 45% 55% 61% 39% / 48% 31% 69% 52%;
 }

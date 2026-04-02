@@ -5,6 +5,11 @@ type TopbarProps = {
   usedFallback: boolean;
   workspaceName: string;
   classLabel: string;
+  isAuthReady: boolean;
+  isSignedIn: boolean;
+  authLabel: string;
+  onSignIn: () => void;
+  onSignOut: () => void;
 };
 
 export function Topbar({
@@ -14,6 +19,11 @@ export function Topbar({
   usedFallback,
   workspaceName,
   classLabel,
+  isAuthReady,
+  isSignedIn,
+  authLabel,
+  onSignIn,
+  onSignOut,
 }: TopbarProps) {
   return (
     <header className="z-10 flex items-center justify-between border-b border-(--border-soft) bg-(--surface-topbar) px-4 py-2 backdrop-blur-lg">
@@ -53,6 +63,29 @@ export function Topbar({
             Lock-in ON
           </span>
         ) : null}
+        {isSignedIn ? (
+          <div className="flex items-center gap-2">
+            <span className="mono-label hidden rounded-full border border-(--border-soft) bg-(--surface-panel) px-3 py-2 text-[11px] font-medium text-(--text-main) md:inline-flex">
+              {authLabel}
+            </span>
+            <button
+              className="mono-label inline-flex items-center rounded-full border border-(--border-soft) bg-(--surface-panel) px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
+              onClick={onSignOut}
+              type="button"
+            >
+              Sign out
+            </button>
+          </div>
+        ) : (
+          <button
+            className="mono-label inline-flex items-center rounded-full border border-(--border-accent) bg-(--surface-accent-soft) px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-(--text-secondary) transition-colors duration-150 hover:bg-(--surface-main-faint) disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!isAuthReady}
+            onClick={onSignIn}
+            type="button"
+          >
+            {authLabel}
+          </button>
+        )}
       </div>
     </header>
   );

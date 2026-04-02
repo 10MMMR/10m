@@ -46,6 +46,7 @@ type LeftPaneProps = {
   onCollapse: () => void;
   onExpand: () => void;
   treeNodes: TreeNode[];
+  expandedIds: Set<string>;
   selectedNodeIds: string[];
   selectedNodeId: string | null;
   classLabel: string;
@@ -57,6 +58,7 @@ type LeftPaneProps = {
   onAddAction: (nodeId: string, action: TreeAddAction) => void;
   onMenuAction: (nodeId: string, action: TreeMenuAction) => void;
   onPrepareRowMenu: (nodeId: string) => void;
+  onToggleExpanded: (nodeId: string) => void;
   onMoveNode: (
     dragNodeId: string,
     targetNodeId: string,
@@ -284,6 +286,7 @@ export function LeftPane({
   onCollapse,
   onExpand,
   treeNodes,
+  expandedIds,
   selectedNodeIds,
   selectedNodeId,
   classLabel,
@@ -295,10 +298,10 @@ export function LeftPane({
   onAddAction,
   onMenuAction,
   onPrepareRowMenu,
+  onToggleExpanded,
   onMoveNode,
 }: LeftPaneProps) {
   const asideRef = useRef<HTMLElement>(null);
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [dragNodeId, setDragNodeId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(
     null,
@@ -377,19 +380,6 @@ export function LeftPane({
       childrenByParent: childMap,
     };
   }, [treeNodes]);
-
-  const toggleExpanded = (nodeId: string) => {
-    setExpandedIds((current) => {
-      const next = new Set(current);
-      if (next.has(nodeId)) {
-        next.delete(nodeId);
-      } else {
-        next.add(nodeId);
-      }
-
-      return next;
-    });
-  };
 
   const visibleNodeIds = useMemo(() => {
     if (!rootNode) {
@@ -592,7 +582,7 @@ export function LeftPane({
               }`}
               onClick={() => {
                 if (canToggle) {
-                  toggleExpanded(node.id);
+                  onToggleExpanded(node.id);
                 }
               }}
               type='button'

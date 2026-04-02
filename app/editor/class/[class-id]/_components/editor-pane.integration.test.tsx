@@ -490,7 +490,7 @@ describe("EditorPane", () => {
         note={null}
         pdfDocument={{
           title: "Lecture packet",
-          dataUrl: "/api/storage/pdf?path=class%2Ffile.pdf",
+          dataUrl: "https://example.supabase.co/storage/v1/object/sign/uploaded-pdfs/user-id/class-id/file-id/lecture-packet.pdf?token=signed-token",
           mimeType: "application/pdf",
           size: 512,
           createdAt: "2025-01-01T00:00:00.000Z",
@@ -501,7 +501,7 @@ describe("EditorPane", () => {
 
     expect(screen.getByTitle("Lecture packet")).toHaveAttribute(
       "src",
-      "/api/storage/pdf?path=class%2Ffile.pdf",
+      "https://example.supabase.co/storage/v1/object/sign/uploaded-pdfs/user-id/class-id/file-id/lecture-packet.pdf?token=signed-token",
     );
     expect(screen.queryByText("No note selected")).not.toBeInTheDocument();
   });

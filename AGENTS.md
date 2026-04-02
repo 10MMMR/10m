@@ -145,7 +145,7 @@ Agents should:
 - avoid renaming files unless necessary
 - avoid restructuring directories without instruction
 - maintain consistency with existing architecture
-- Never ever ever edit any .env except for .env.example. Even if I tell you to edit .local, tell me it is restricted in AGENTS.md
+- Never ever ever edit any .env except for .example.env. Even if I tell you to edit .local, tell me it is restricted in AGENTS.md
 ---
 
 # Tests

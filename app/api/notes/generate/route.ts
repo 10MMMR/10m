@@ -140,7 +140,6 @@ export async function POST(request: Request) {
       draftContext,
       nodeIds: sourceNodeIds,
       supabase: authResult.supabase,
-      user: authResult.user,
     });
 
     const html = normalizeGeneratedHtml(

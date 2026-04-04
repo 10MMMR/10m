@@ -7,10 +7,15 @@ import {
   MicrophoneIcon,
   PaperClipIcon,
 } from "@heroicons/react/24/outline";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Message } from "../_lib/workspace-data";
 
 type ChatPaneProps = {
+  disabled: boolean;
+  disabledMessage: string;
   locked: boolean;
+  isStreaming: boolean;
   onHide: () => void;
   messages: Message[];
   inputValue: string;
@@ -19,7 +24,10 @@ type ChatPaneProps = {
 };
 
 export function ChatPane({
+  disabled,
+  disabledMessage,
   locked,
+  isStreaming,
   onHide,
   messages,
   inputValue,
@@ -38,6 +46,11 @@ export function ChatPane({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    if (disabled || isStreaming) {
+      return;
+    }
+
     onSubmit();
   };
 
@@ -75,35 +88,24 @@ export function ChatPane({
           const isUser = message.side === "user";
 
           return (
-            <div
-              key={`${message.author}-${index}`}
-              className={`mb-4 flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}
-            >
-              <div
-                className={`grid h-9 w-9 flex-none place-items-center rounded-full text-[11px] font-extrabold ${
-                  isUser
-                    ? "bg-(--surface-user-soft) text-(--text-secondary)"
-                    : "bg-(--surface-main-soft) text-(--main)"
-                }`}
-                aria-hidden="true"
-              >
-                {isUser ? "Y" : "AI"}
-              </div>
-              <div className={`max-w-5/6 ${isUser ? "text-right" : ""}`}>
-                <span className="mb-1.5 block text-[12px] text-(--text-muted)">
-                  {message.author} · {message.time}
-                </span>
-                <div
-                  className={`rounded-2xl border px-4 py-3.5 leading-relaxed shadow-md ${
-                    isUser
-                      ? "rounded-br-2xl rounded-bl-md border-transparent bg-(--main) text-(--text-contrast)"
-                      : "rounded-br-md rounded-bl-2xl border-(--border-soft) bg-(--surface-base) text-(--text-main)"
-                  }`}
-                >
+            isUser ? (
+              <div key={`${message.author}-${index}`} className="mb-4 flex justify-end">
+                <div className="max-w-[85%] rounded-2xl bg-(--main) px-4 py-3.5 text-(--text-contrast) shadow-md sm:max-w-[78%]">
                   {message.text}
                 </div>
               </div>
-            </div>
+            ) : (
+              <div
+                key={`${message.author}-${index}`}
+                className="mb-6 w-full text-(--text-main)"
+              >
+                <div className="chat-markdown w-full leading-8">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {message.text}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            )
           );
         })}
       </div>
@@ -128,10 +130,11 @@ export function ChatPane({
           </button>
           <input
             className="h-11 min-w-0 flex-1 border-0 bg-transparent text-(--text-main) outline-none"
-            placeholder="Ask a question..."
+            placeholder={disabled ? disabledMessage : "Ask a question..."}
             type="text"
             value={inputValue}
             onChange={handleInputChange}
+            disabled={disabled || isStreaming}
           />
           <button
             className="grid h-11 w-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
@@ -144,10 +147,16 @@ export function ChatPane({
             className="grid h-11 w-11 place-items-center rounded-full border border-(--border-strong) bg-(--main) text-(--text-contrast) shadow-(--shadow-accent) transition-all duration-200 hover:-translate-y-0.5 hover:shadow-(--shadow-accent-strong)"
             type="submit"
             aria-label="Send message"
+            disabled={disabled || isStreaming}
           >
             <ArrowRightIcon className="h-5 w-5" aria-hidden="true" />
           </button>
         </form>
+        {disabled ? (
+          <p className="px-2 pt-2 text-center text-[11px] text-(--text-muted)">
+            {disabledMessage}
+          </p>
+        ) : null}
         <div className="flex items-center justify-center gap-4 pt-2.5 text-[11px] text-(--text-muted)">
           <button className="border-0 bg-transparent text-inherit" type="button">
             Plugins

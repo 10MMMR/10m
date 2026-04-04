@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WorkspaceShell } from "./workspace-shell";
+import type { AssistantCommand } from "@/lib/ai/assistant-contract";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { moveNodeInTree } from "@/lib/tree-repository";
 
@@ -12,7 +13,44 @@ jest.mock("./topbar", () => ({
 }));
 
 jest.mock("./chat-pane", () => ({
-  ChatPane: () => <div data-testid="chat-pane" />,
+  ChatPane: ({
+    disabled,
+    disabledMessage,
+    inputValue,
+    isStreaming,
+    messages,
+    onInputChange,
+    onSubmit,
+  }: {
+    disabled: boolean;
+    disabledMessage: string;
+    inputValue: string;
+    isStreaming: boolean;
+    messages: Array<{ side: "assistant" | "user"; text: string }>;
+    onInputChange: (value: string) => void;
+    onSubmit: () => void;
+  }) => (
+    <div data-testid="chat-pane">
+      <p data-testid="chat-disabled">{disabled ? "yes" : "no"}</p>
+      <p data-testid="chat-disabled-message">{disabledMessage}</p>
+      <p data-testid="chat-messages">
+        {messages.map((message) => `${message.side}:${message.text}`).join(" | ") || "none"}
+      </p>
+      <input
+        aria-label="Chat input"
+        disabled={disabled || isStreaming}
+        onChange={(event) => onInputChange(event.target.value)}
+        value={inputValue}
+      />
+      <button
+        disabled={disabled || isStreaming}
+        onClick={onSubmit}
+        type="button"
+      >
+        Send chat
+      </button>
+    </div>
+  ),
 }));
 
 jest.mock("./editor-pane", () => ({
@@ -28,7 +66,7 @@ jest.mock("./editor-pane", () => ({
   }: {
     isDirty: boolean;
     noteId: string | null;
-    note: { title: string } | null;
+    note: { title: string; body: string } | null;
     onBodyChange: (body: string) => void;
     onDelete: () => void;
     pdfDocument?: { dataUrl: string; title: string } | null;
@@ -39,6 +77,7 @@ jest.mock("./editor-pane", () => ({
       <p data-testid="draft-state">{isDirty ? "dirty" : "clean"}</p>
       <p data-testid="draft-id">{noteId ?? "none"}</p>
       <p data-testid="draft-title">{note?.title ?? "none"}</p>
+      <p data-testid="draft-body">{note?.body ?? "none"}</p>
       <p data-testid="pdf-title">{pdfDocument?.title ?? "none"}</p>
       <p data-testid="pdf-url">{pdfDocument?.dataUrl ?? "none"}</p>
       <button onClick={() => onTitleChange("Fresh note")} type="button">
@@ -398,6 +437,16 @@ describe("WorkspaceShell note flow", () => {
   let idCounter = 0;
   let uploadShouldFailAfterStorage = false;
   let deleteShouldFailAfterTree = false;
+  let chatShouldFail = false;
+  let noteGenerationShouldFail = false;
+  let nextAssistantCommand: AssistantCommand = {
+    action: "reply",
+    message: "Structured reply",
+  };
+  let nextGeneratedHtml = "<h1>Generated Study Note</h1><p>Focused summary.</p>";
+  let nextGeneratedTitle: string | null = null;
+  let lastChatBody: Record<string, unknown> | null = null;
+  let lastGenerateBody: Record<string, unknown> | null = null;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -416,8 +465,53 @@ describe("WorkspaceShell note flow", () => {
     jest.mocked(getSupabaseBrowserClient).mockReturnValue(fakeSupabase as never);
     uploadShouldFailAfterStorage = false;
     deleteShouldFailAfterTree = false;
+    chatShouldFail = false;
+    noteGenerationShouldFail = false;
+    nextAssistantCommand = {
+      action: "reply",
+      message: "Structured reply",
+    };
+    nextGeneratedHtml = "<h1>Generated Study Note</h1><p>Focused summary.</p>";
+    nextGeneratedTitle = null;
+    lastChatBody = null;
+    lastGenerateBody = null;
     originalFetch = global.fetch;
     global.fetch = jest.fn(async (input, init) => {
+      if (input === "/api/chat") {
+        lastChatBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+
+        if (chatShouldFail) {
+          return {
+            json: async () => ({ error: "Unable to contact the chat assistant." }),
+            ok: false,
+          } as Response;
+        }
+
+        return {
+          json: async () => ({ assistant: nextAssistantCommand }),
+          ok: true,
+        } as Response;
+      }
+
+      if (input === "/api/notes/generate") {
+        lastGenerateBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+
+        if (noteGenerationShouldFail) {
+          return {
+            json: async () => ({ error: "Unable to generate note." }),
+            ok: false,
+          } as Response;
+        }
+
+        return {
+          json: async () => ({
+            html: nextGeneratedHtml,
+            ...(nextGeneratedTitle ? { title: nextGeneratedTitle } : {}),
+          }),
+          ok: true,
+        } as Response;
+      }
+
       if (input !== "/api/uploads/pdf") {
         throw new Error(`Unexpected fetch: ${String(input)}`);
       }
@@ -612,6 +706,17 @@ describe("WorkspaceShell note flow", () => {
 
     expect(rowLabel).toBeDefined();
     return rowLabel!;
+  };
+
+  const sendChatMessage = async (value: string) => {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Chat input"), {
+        target: { value },
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send chat" }));
+    });
   };
 
   test("creates and saves a note through Supabase", async () => {
@@ -833,6 +938,254 @@ describe("WorkspaceShell note flow", () => {
       expect(screen.getByTestId("draft-title")).toHaveTextContent("Fresh note");
     });
     expect(screen.getByRole("button", { name: /Fresh note/ })).toBeInTheDocument();
+  });
+
+  test("disables chat until a note or pdf is selected", async () => {
+    renderWorkspace();
+
+    expect(screen.getByTestId("chat-disabled")).toHaveTextContent("yes");
+
+    await createRootNote();
+
+    expect(screen.getByTestId("chat-disabled")).toHaveTextContent("no");
+  });
+
+  test("keeps separate chat sessions per active document", async () => {
+    renderWorkspace();
+
+    await createRootNote();
+    await sendChatMessage("Question for note one");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-messages")).toHaveTextContent(
+        "user:Question for note one | assistant:Structured reply",
+      );
+    });
+    expect(lastChatBody).toMatchObject({
+      activeNodeId: "test-uuid-2",
+      classId: "cs101-ai",
+    });
+
+    await createRootNote();
+    await sendChatMessage("Question for note two");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-messages")).toHaveTextContent(
+        "user:Question for note two | assistant:Structured reply",
+      );
+    });
+
+    const noteOneRow = await findTreeRowLabel("Untitled note");
+    await act(async () => {
+      fireEvent.click(noteOneRow);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-messages")).toHaveTextContent(
+        "user:Question for note one | assistant:Structured reply",
+      );
+    });
+  });
+
+  test("keeps unsupported requests as reply actions and does not generate notes", async () => {
+    renderWorkspace();
+
+    await uploadPdfFromAddMenu(0);
+    const pdfRow = await findTreeRowLabel("lecture.pdf");
+    await act(async () => {
+      fireEvent.click(pdfRow);
+    });
+
+    nextAssistantCommand = {
+      action: "reply",
+      message: "I can't open PDFs for you yet.",
+    };
+
+    const beforeTreeCount = fakeSupabase.__treeRows.length;
+
+    await sendChatMessage("Open this pdf");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-messages")).toHaveTextContent(
+        "user:Open this pdf | assistant:I can't open PDFs for you yet.",
+      );
+    });
+    expect(lastGenerateBody).toBeNull();
+    expect(fakeSupabase.__treeRows).toHaveLength(beforeTreeCount);
+    expect(screen.getByTestId("pdf-title")).toHaveTextContent("lecture.pdf");
+  });
+
+  test("routes chat generate_note to a new note and persists generated html", async () => {
+    renderWorkspace();
+
+    await createRootNote();
+
+    nextAssistantCommand = {
+      action: "generate_note",
+      message: "Creating a fresh study note.",
+      prompt: "Create sharp study notes from the current note.",
+      target: "new_note",
+      title: "AI Study Sheet",
+    };
+    nextGeneratedHtml = "<h1>AI Study Sheet</h1><p>Condensed concepts.</p>";
+    nextGeneratedTitle = "AI Study Sheet";
+
+    const sourceNoteId = screen.getByTestId("draft-id").textContent;
+
+    await sendChatMessage("Make a new study note from this");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("draft-title")).toHaveTextContent("AI Study Sheet");
+    });
+    expect(screen.getByTestId("draft-body")).toHaveTextContent(
+      "<h1>AI Study Sheet</h1><p>Condensed concepts.</p>",
+    );
+    expect(screen.getByTestId("chat-messages")).toHaveTextContent(
+      "user:Make a new study note from this | assistant:Creating a fresh study note.",
+    );
+    expect(lastGenerateBody).toMatchObject({
+      classId: "cs101-ai",
+      mode: "new_note",
+      prompt: "Create sharp study notes from the current note.",
+      sourceNodeIds: [sourceNoteId],
+      title: "AI Study Sheet",
+    });
+  });
+
+  test("overwrites the current note when chat returns generate_note with current_note target", async () => {
+    renderWorkspace();
+
+    await createRootNote();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update draft title" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    });
+
+    nextAssistantCommand = {
+      action: "generate_note",
+      message: "Overwriting the current note.",
+      prompt: "Rewrite the open note into premium study notes.",
+      target: "current_note",
+    };
+    nextGeneratedHtml = "<h2>Overwritten</h2><p>New body.</p>";
+
+    const noteId = screen.getByTestId("draft-id").textContent;
+
+    await sendChatMessage("Overwrite this note with better study notes");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("draft-body")).toHaveTextContent(
+        "<h2>Overwritten</h2><p>New body.</p>",
+      );
+    });
+    expect(screen.getByTestId("draft-id")).toHaveTextContent(noteId ?? "");
+    expect(lastGenerateBody).toMatchObject({
+      mode: "overwrite_note",
+      targetNoteId: noteId,
+    });
+    expect(screen.getByTestId("chat-messages")).toHaveTextContent(
+      "assistant:Overwriting the current note.",
+    );
+  });
+
+  test("falls back to a new note when chat asks to overwrite while a pdf is active", async () => {
+    renderWorkspace();
+
+    await uploadPdfFromAddMenu(0);
+    const pdfRow = await findTreeRowLabel("lecture.pdf");
+    await act(async () => {
+      fireEvent.click(pdfRow);
+    });
+
+    nextAssistantCommand = {
+      action: "generate_note",
+      message: "Creating a new note from the PDF.",
+      prompt: "Turn this PDF into a study note.",
+      target: "current_note",
+      title: "PDF Notes",
+    };
+    nextGeneratedHtml = "<h1>PDF Notes</h1><p>PDF summary.</p>";
+
+    await sendChatMessage("Overwrite this with notes");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("draft-title")).toHaveTextContent("PDF Notes");
+    });
+    expect(screen.getByTestId("draft-body")).toHaveTextContent(
+      "<h1>PDF Notes</h1><p>PDF summary.</p>",
+    );
+    expect(lastGenerateBody).toMatchObject({
+      mode: "new_note",
+      title: "PDF Notes",
+    });
+  });
+
+  test("generates a new note from the tree menu using selected sources", async () => {
+    seedTree(fakeSupabase, [
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "root:cs101-ai",
+        kind: "root",
+        order: 0,
+        parentId: null,
+        title: "cs101-ai",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        body: "<p>Chapter note body</p>",
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "note-node-1",
+        kind: "note",
+        noteId: "note-1",
+        order: 1,
+        parentId: "root:cs101-ai",
+        title: "Chapter note",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        fileMimeType: "application/pdf",
+        fileSize: 2048,
+        fileStoragePath: "user-123/cs101-ai/file-1/lecture.pdf",
+        id: "file-1",
+        kind: "file",
+        order: 2,
+        parentId: "root:cs101-ai",
+        title: "lecture.pdf",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+    ]);
+
+    renderWorkspace();
+
+    const noteRow = await screen.findByRole("button", { name: /Chapter note/ });
+    const pdfRow = await findTreeRowLabel("lecture.pdf");
+
+    await act(async () => {
+      fireEvent.click(noteRow);
+    });
+    await act(async () => {
+      fireEvent.click(pdfRow, { ctrlKey: true });
+    });
+
+    const openMenuButtons = screen.getAllByRole("button", { name: "Open menu" });
+    await act(async () => {
+      fireEvent.click(openMenuButtons[openMenuButtons.length - 1]);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Generate notes" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("draft-title")).toHaveTextContent(
+        "Study Notes - Chapter note + 1 more",
+      );
+    });
+    expect(lastGenerateBody).toMatchObject({
+      mode: "new_note",
+      sourceNodeIds: ["note-node-1", "file-1"],
+    });
   });
 
   test("shows a clear message and no tree when signed out", async () => {

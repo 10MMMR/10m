@@ -8,7 +8,7 @@ import {
   type TreeNode,
 } from "@/lib/tree-repository";
 import {
-  getSupabaseServerClient,
+  createSupabaseServerClient,
   getSupabaseStorageBucket,
 } from "@/lib/supabase-server";
 
@@ -31,16 +31,16 @@ function getBearerToken(request: Request) {
 }
 
 async function getAuthenticatedUser(request: Request) {
-  const supabase = getSupabaseServerClient();
-
-  if (!supabase) {
-    return { error: "Supabase storage is not configured.", status: 500, supabase: null };
-  }
-
   const token = getBearerToken(request);
 
   if (!token) {
-    return { error: "Unauthorized.", status: 401, supabase };
+    return { error: "Unauthorized.", status: 401, supabase: null };
+  }
+
+  const supabase = createSupabaseServerClient(token);
+
+  if (!supabase) {
+    return { error: "Supabase storage is not configured.", status: 500, supabase: null };
   }
 
   const {
@@ -210,7 +210,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const repository = new SupabaseTreeRepository(supabase, user.id);
+  const repository = new SupabaseTreeRepository(supabase);
   let currentTree: TreeNode[];
 
   try {
@@ -309,8 +309,8 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "Invalid nodeIds." }, { status: 400 });
   }
 
-  const { supabase, user } = authResult;
-  const repository = new SupabaseTreeRepository(supabase, user.id);
+  const { supabase } = authResult;
+  const repository = new SupabaseTreeRepository(supabase);
   let currentTree: TreeNode[];
 
   try {

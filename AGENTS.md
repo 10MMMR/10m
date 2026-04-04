@@ -371,6 +371,46 @@ Consistency across the codebase is more important than introducing new patterns.
 
 ---
 
+## Code Review Rules
+
+When I ask for a code review, review the code with a strict senior-engineer mindset. Focus on whether the implementation is correct, safe, maintainable, and justified for the problem it solves.
+
+Prioritize finding:
+
+- bad coding practices
+- security issues and potential vulnerabilities
+- behavioral bugs and regression risks
+- bloated, roundabout, or over-engineered implementations
+- abstractions or fixes that add more complexity than the problem justifies
+- unnecessary overhead, indirection, or maintenance burden
+- performance issues, avoidable inefficiencies, or unnecessary state/rendering
+- weak error handling
+- edge case failures
+- poor separation of concerns
+- duplicated logic, dead code, misleading comments, or unclear naming
+- inconsistency with existing repository patterns
+
+Review principles:
+
+- Prefer straightforward solutions over clever or overly abstract ones.
+- Call out when the tradeoff is not worth it.
+- Flag premature optimization, speculative abstraction, and unnecessary architecture.
+- Judge whether the implementation meaningfully improves the codebase or just adds bloat.
+- Do not focus on minor style issues unless they affect readability, correctness, consistency, or maintenance.
+
+Response format:
+
+1. List findings first, ordered by severity.
+2. For each finding, explain:
+   - what is wrong
+   - why it matters
+   - the practical risk
+   - the simpler or safer alternative when relevant
+3. Then list any open questions or assumptions.
+4. End with a brief overall assessment.
+5. If no meaningful issues are found, say so explicitly and mention any residual risks or testing gaps.
+
+
 # Future Expansion
 
 This document will evolve as the project grows.

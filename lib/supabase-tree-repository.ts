@@ -6,7 +6,6 @@ import {
 } from "@/lib/tree-repository";
 
 type TreeNodeRow = {
-  user_id?: string;
   class_id: string;
   created_at: string;
   file_mime_type: string | null;
@@ -22,7 +21,6 @@ type TreeNodeRow = {
 };
 
 type EditorNoteRow = {
-  user_id?: string;
   body: string;
   created_at: string;
   id: string;
@@ -81,24 +79,16 @@ function toEditorNoteRow(node: TreeNode): EditorNoteRow {
 }
 
 export class SupabaseTreeRepository {
-  constructor(
-    private readonly client: SupabaseClient,
-    private readonly userId?: string,
-  ) {}
+  constructor(private readonly client: SupabaseClient) {}
 
   async listTreeByClass(classId: string) {
-    let query = this.client
+    const { data, error } = await this.client
       .from("editor_tree_nodes")
       .select(
         "class_id, created_at, file_mime_type, file_size, file_storage_path, id, kind, note_id, order_index, parent_id, title, updated_at",
       )
-      .eq("class_id", classId);
-
-    if (this.userId) {
-      query = query.eq("user_id", this.userId);
-    }
-
-    const { data, error } = await query.order("order_index", { ascending: true });
+      .eq("class_id", classId)
+      .order("order_index", { ascending: true });
 
     if (error) {
       throw error;
@@ -110,16 +100,10 @@ export class SupabaseTreeRepository {
     const noteMap = new Map<string, EditorNoteRow>();
 
     if (noteIds.length > 0) {
-      let noteQuery = this.client
+      const { data: noteData, error: noteError } = await this.client
         .from("editor_notes")
         .select("body, created_at, id, title, updated_at")
         .in("id", noteIds);
-
-      if (this.userId) {
-        noteQuery = noteQuery.eq("user_id", this.userId);
-      }
-
-      const { data: noteData, error: noteError } = await noteQuery;
 
       if (noteError) {
         throw noteError;
@@ -151,28 +135,16 @@ export class SupabaseTreeRepository {
 
   async replaceTree(classId: string, nodes: TreeNode[]) {
     const nextNodes = sortTreeNodes(ensureTreeRoot(nodes, classId));
-    const rows = nextNodes.map((node) => ({
-      ...toTreeNodeRow(node),
-      ...(this.userId ? { user_id: this.userId } : {}),
-    }));
+    const rows = nextNodes.map(toTreeNodeRow);
     const nodeIds = nextNodes.map((node) => node.id);
     const noteNodes = nextNodes.filter((node) => node.kind === "note");
-    const noteRows = noteNodes.map((node) => ({
-      ...toEditorNoteRow(node),
-      ...(this.userId ? { user_id: this.userId } : {}),
-    }));
+    const noteRows = noteNodes.map(toEditorNoteRow);
     const noteIds = noteRows.map((row) => row.id);
 
-    let existingRowsQuery = this.client
+    const { data: existingRows, error: listError } = await this.client
       .from("editor_tree_nodes")
       .select("id, note_id")
       .eq("class_id", classId);
-
-    if (this.userId) {
-      existingRowsQuery = existingRowsQuery.eq("user_id", this.userId);
-    }
-
-    const { data: existingRows, error: listError } = await existingRowsQuery;
 
     if (listError) {
       throw listError;
@@ -212,16 +184,11 @@ export class SupabaseTreeRepository {
       .filter((id) => !noteIds.includes(id));
 
     if (staleNodeIds.length > 0) {
-      let deleteQuery = this.client
+      const { error: deleteError } = await this.client
         .from("editor_tree_nodes")
         .delete()
-        .eq("class_id", classId);
-
-      if (this.userId) {
-        deleteQuery = deleteQuery.eq("user_id", this.userId);
-      }
-
-      const { error: deleteError } = await deleteQuery.in("id", staleNodeIds);
+        .eq("class_id", classId)
+        .in("id", staleNodeIds);
 
       if (deleteError) {
         throw deleteError;
@@ -229,16 +196,10 @@ export class SupabaseTreeRepository {
     }
 
     if (staleNoteIds.length > 0) {
-      let deleteNotesQuery = this.client
+      const { error: deleteNotesError } = await this.client
         .from("editor_notes")
         .delete()
         .in("id", staleNoteIds);
-
-      if (this.userId) {
-        deleteNotesQuery = deleteNotesQuery.eq("user_id", this.userId);
-      }
-
-      const { error: deleteNotesError } = await deleteNotesQuery;
 
       if (deleteNotesError) {
         throw deleteNotesError;

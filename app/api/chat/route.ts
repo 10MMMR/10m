@@ -144,7 +144,6 @@ export async function POST(request: Request) {
       draftContext,
       nodeIds: [activeNodeId],
       supabase: authResult.supabase,
-      user: authResult.user,
     });
 
     const rawAssistant = await provider.generateText({

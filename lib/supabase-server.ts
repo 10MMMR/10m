@@ -1,17 +1,15 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-
-let serverClient: SupabaseClient | null | undefined;
+import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseServerConfig() {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (!url || !serviceRoleKey) {
+  if (!url || !anonKey) {
     return null;
   }
 
   return {
-    serviceRoleKey,
+    anonKey,
     url,
   };
 }
@@ -20,24 +18,22 @@ export function getSupabaseStorageBucket() {
   return process.env.SUPABASE_STORAGE_BUCKET ?? null;
 }
 
-export function getSupabaseServerClient() {
-  if (serverClient !== undefined) {
-    return serverClient;
-  }
-
+export function createSupabaseServerClient(accessToken: string) {
   const config = getSupabaseServerConfig();
 
   if (!config) {
-    serverClient = null;
-    return serverClient;
+    return null;
   }
 
-  serverClient = createClient(config.url, config.serviceRoleKey, {
+  return createClient(config.url, config.anonKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
     },
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
   });
-
-  return serverClient;
 }

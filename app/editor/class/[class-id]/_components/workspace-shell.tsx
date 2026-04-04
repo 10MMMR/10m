@@ -41,6 +41,10 @@ import {
   updateNodeInTree,
 } from "@/lib/tree-repository";
 
+import { supabase } from "../../../../_global/authentication/supabaseClient";
+import { handleGoogleSignIn } from "../../../../_global/authentication/authentication";
+import { handleSignOut } from "../../../../_global/authentication/authentication";
+
 const MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024;
 const PDF_SIGNED_URL_TTL_SECONDS = 60 * 60;
 const AUTH_REQUIRED_MESSAGE = "Sign in with Google to access notes.";
@@ -150,7 +154,10 @@ function toChatRequestMessages(messages: Message[]): ChatRequestMessage[] {
     .filter((message) => message.content.length > 0);
 }
 
-function buildUpdatedNote(node: TreeNode, updates: Partial<Pick<TreeNode, "title" | "body">>) {
+function buildUpdatedNote(
+  node: TreeNode,
+  updates: Partial<Pick<TreeNode, "title" | "body">>,
+) {
   return {
     ...node,
     ...updates,
@@ -222,7 +229,10 @@ function collectCascadeDeleteIds(nodes: TreeNode[], nodeIds: string[]) {
   };
 }
 
-function buildGeneratedNoteTitle(sourceNodes: TreeNode[], overrideTitle?: string) {
+function buildGeneratedNoteTitle(
+  sourceNodes: TreeNode[],
+  overrideTitle?: string,
+) {
   if (overrideTitle?.trim()) {
     return overrideTitle.trim();
   }
@@ -264,7 +274,7 @@ export function WorkspaceShell({
   usedFallback,
 }: WorkspaceShellProps) {
   const workspace = getWorkspaceSeed(classId);
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  // const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const treeRepository = useRef<SupabaseTreeRepository | null>(
     supabase ? new SupabaseTreeRepository(supabase) : null,
   );
@@ -279,14 +289,20 @@ export function WorkspaceShell({
   const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [selectedNodeKind, setSelectedNodeKind] = useState<TreeNodeKind | null>(null);
-  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
+  const [selectedNodeKind, setSelectedNodeKind] = useState<TreeNodeKind | null>(
+    null,
+  );
+  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(
+    null,
+  );
   const [draftNoteNode, setDraftNoteNode] = useState<TreeNode | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [isDirty, setIsDirty] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] =
     useState<DeleteConfirmationState | null>(null);
-  const [chatSessions, setChatSessions] = useState<Record<string, Message[]>>({});
+  const [chatSessions, setChatSessions] = useState<Record<string, Message[]>>(
+    {},
+  );
   const [chatInput, setChatInput] = useState("");
   const [isChatStreaming, setIsChatStreaming] = useState(false);
   const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(
@@ -300,9 +316,9 @@ export function WorkspaceShell({
   const [selectedPdfUrl, setSelectedPdfUrl] = useState<string | null>(null);
   const pendingSignInUiResetUserIdRef = useRef<string | null>(null);
   const restoredTreeUiStateKeyRef = useRef<string | null>(null);
-  const [pendingUploadParentId, setPendingUploadParentId] = useState<string | null>(
-    null,
-  );
+  const [pendingUploadParentId, setPendingUploadParentId] = useState<
+    string | null
+  >(null);
 
   const desktopGridColumns = isLeftPaneCollapsed
     ? isChatOpen
@@ -349,10 +365,13 @@ export function WorkspaceShell({
       updatedAt: selectedFileNode.updatedAt,
     } satisfies SelectedPdfDocument;
   }, [selectedFileNode, selectedPdfUrl]);
-  const activeAiContextId = selectedNodeKind === "note" || selectedNodeKind === "file"
-    ? selectedNodeId
-    : null;
-  const activeChatMessages = activeAiContextId ? (chatSessions[activeAiContextId] ?? []) : [];
+  const activeAiContextId =
+    selectedNodeKind === "note" || selectedNodeKind === "file"
+      ? selectedNodeId
+      : null;
+  const activeChatMessages = activeAiContextId
+    ? (chatSessions[activeAiContextId] ?? [])
+    : [];
   const activeDraftContext = useMemo(() => {
     if (!draftNoteNode || draftNoteNode.kind !== "note") {
       return null;
@@ -398,7 +417,10 @@ export function WorkspaceShell({
         throw new Error("Sign in with Google to save notes.");
       }
 
-      const savedNodes = await treeRepository.current.replaceTree(classId, nextNodes);
+      const savedNodes = await treeRepository.current.replaceTree(
+        classId,
+        nextNodes,
+      );
       setTreeNodes(savedNodes);
       treeNodesRef.current = savedNodes;
       return savedNodes;
@@ -419,17 +441,21 @@ export function WorkspaceShell({
   }, [supabase]);
 
   const syncSelectionState = useCallback(
-    (nodes: TreeNode[], nextSelectedIds: string[], nextActiveId: string | null) => {
+    (
+      nodes: TreeNode[],
+      nextSelectedIds: string[],
+      nextActiveId: string | null,
+    ) => {
       const availableIds = new Set(nodes.map((node) => node.id));
-      const uniqueSelectedIds = Array.from(new Set(nextSelectedIds)).filter((id) =>
-        availableIds.has(id),
+      const uniqueSelectedIds = Array.from(new Set(nextSelectedIds)).filter(
+        (id) => availableIds.has(id),
       );
       const activeId =
         nextActiveId && availableIds.has(nextActiveId)
           ? nextActiveId
-          : uniqueSelectedIds.at(-1) ?? null;
+          : (uniqueSelectedIds.at(-1) ?? null);
       const activeNode = activeId
-        ? nodes.find((node) => node.id === activeId) ?? null
+        ? (nodes.find((node) => node.id === activeId) ?? null)
         : null;
 
       setSelectedNodeIds(uniqueSelectedIds);
@@ -521,7 +547,14 @@ export function WorkspaceShell({
       expandedIds: Array.from(expandedIds),
       selectedNodeId: selectedNodeId,
     });
-  }, [authUser, classId, expandedIds, selectedNodeId, selectedNodeKind, treeNodes.length]);
+  }, [
+    authUser,
+    classId,
+    expandedIds,
+    selectedNodeId,
+    selectedNodeKind,
+    treeNodes.length,
+  ]);
 
   useEffect(() => {
     const mobileQuery = window.matchMedia("(max-width: 767px)");
@@ -533,7 +566,8 @@ export function WorkspaceShell({
     };
 
     mobileQuery.addEventListener("change", handleViewportChange);
-    return () => mobileQuery.removeEventListener("change", handleViewportChange);
+    return () =>
+      mobileQuery.removeEventListener("change", handleViewportChange);
   }, []);
 
   useEffect(() => {
@@ -671,7 +705,10 @@ export function WorkspaceShell({
     setExpandedIds(nextExpandedIds);
     restoredTreeUiStateKeyRef.current = restoreKey;
 
-    if (!persistedState.selectedNodeId || !nodeIds.has(persistedState.selectedNodeId)) {
+    if (
+      !persistedState.selectedNodeId ||
+      !nodeIds.has(persistedState.selectedNodeId)
+    ) {
       return;
     }
 
@@ -697,7 +734,10 @@ export function WorkspaceShell({
 
     void supabase.storage
       .from(storageBucket)
-      .createSignedUrl(selectedFileNode.fileStoragePath, PDF_SIGNED_URL_TTL_SECONDS)
+      .createSignedUrl(
+        selectedFileNode.fileStoragePath,
+        PDF_SIGNED_URL_TTL_SECONDS,
+      )
       .then(({ data, error }) => {
         if (cancelled) {
           return;
@@ -752,7 +792,7 @@ export function WorkspaceShell({
         : [...selectedNodeIds, node.id];
       const nextActiveId = isSelected
         ? selectedNodeId === node.id
-          ? nextSelectedIds.at(-1) ?? null
+          ? (nextSelectedIds.at(-1) ?? null)
           : selectedNodeId
         : selectedNodeId && selectedNodeIds.includes(selectedNodeId)
           ? selectedNodeId
@@ -801,7 +841,9 @@ export function WorkspaceShell({
 
   const persistNoteNode = useCallback(
     async (node: TreeNode) => {
-      const savedNodes = await persistTree(updateNodeInTree(treeNodesRef.current, node));
+      const savedNodes = await persistTree(
+        updateNodeInTree(treeNodesRef.current, node),
+      );
       syncSelectionState(savedNodes, [node.id], node.id);
       setSelectionAnchorId(node.id);
       setIsDirty(false);
@@ -811,15 +853,18 @@ export function WorkspaceShell({
     [persistTree, syncSelectionState],
   );
 
-  const setDraftNoteContent = useCallback((noteId: string, title: string, body: string) => {
-    setDraftNoteNode((current) => {
-      if (!current || current.kind !== "note" || current.id !== noteId) {
-        return current;
-      }
+  const setDraftNoteContent = useCallback(
+    (noteId: string, title: string, body: string) => {
+      setDraftNoteNode((current) => {
+        if (!current || current.kind !== "note" || current.id !== noteId) {
+          return current;
+        }
 
-      return buildUpdatedNote(current, { body, title });
-    });
-  }, []);
+        return buildUpdatedNote(current, { body, title });
+      });
+    },
+    [],
+  );
 
   const createNoteUnderParent = async (
     parentId: string,
@@ -836,7 +881,9 @@ export function WorkspaceShell({
       return;
     }
 
-    const parentNode = treeNodesRef.current.find((node) => node.id === parentId);
+    const parentNode = treeNodesRef.current.find(
+      (node) => node.id === parentId,
+    );
 
     if (!parentNode || !canParentContainChild(parentNode.kind, "note")) {
       return;
@@ -856,7 +903,9 @@ export function WorkspaceShell({
       if (shouldOpenParent) {
         expandedAncestorIds.add(parentId);
       }
-      setExpandedIds((current) => new Set([...current, ...expandedAncestorIds]));
+      setExpandedIds(
+        (current) => new Set([...current, ...expandedAncestorIds]),
+      );
       syncSelectionState(savedNodes, [created.id], created.id);
       setSelectionAnchorId(created.id);
       setIsDirty(options?.markDirty ?? true);
@@ -881,7 +930,9 @@ export function WorkspaceShell({
       return;
     }
 
-    const parentNode = treeNodesRef.current.find((node) => node.id === parentId);
+    const parentNode = treeNodesRef.current.find(
+      (node) => node.id === parentId,
+    );
 
     if (!parentNode || !canParentContainChild(parentNode.kind, "folder")) {
       return;
@@ -897,7 +948,9 @@ export function WorkspaceShell({
       if (shouldOpenParent) {
         expandedAncestorIds.add(parentId);
       }
-      setExpandedIds((current) => new Set([...current, ...expandedAncestorIds]));
+      setExpandedIds(
+        (current) => new Set([...current, ...expandedAncestorIds]),
+      );
       syncSelectionState(savedNodes, [created.id], created.id);
       setSelectionAnchorId(created.id);
     } catch (error) {
@@ -975,7 +1028,8 @@ export function WorkspaceShell({
     let effectiveMode = mode;
     let targetNode =
       effectiveMode === "overwrite_note" && targetNoteId
-        ? treeNodesRef.current.find((node) => node.id === targetNoteId) ?? null
+        ? (treeNodesRef.current.find((node) => node.id === targetNoteId) ??
+          null)
         : null;
 
     const fallbackTitle =
@@ -1023,7 +1077,9 @@ export function WorkspaceShell({
         title: fallbackTitle,
       }),
     });
-    const payload = (await response.json().catch(() => null)) as GenerateNoteResponse | null;
+    const payload = (await response
+      .json()
+      .catch(() => null)) as GenerateNoteResponse | null;
 
     if (!response.ok || !payload?.html) {
       const errorMessage = payload?.error || "Unable to generate note.";
@@ -1052,7 +1108,11 @@ export function WorkspaceShell({
     }
 
     if (action === "add") {
-      if (node.kind === "root" || node.kind === "folder" || node.kind === "file") {
+      if (
+        node.kind === "root" ||
+        node.kind === "folder" ||
+        node.kind === "file"
+      ) {
         await createNoteUnderParent(node.id);
       }
       return;
@@ -1062,7 +1122,10 @@ export function WorkspaceShell({
       const selectedIds = selectedNodeIds.includes(node.id)
         ? selectedNodeIds
         : [node.id];
-      const selectedSources = getSelectableFiles(treeNodesRef.current, selectedIds);
+      const selectedSources = getSelectableFiles(
+        treeNodesRef.current,
+        selectedIds,
+      );
 
       if (selectedSources.length === 0) {
         return;
@@ -1092,7 +1155,9 @@ export function WorkspaceShell({
 
     const targetIds = selectedNodeIds.includes(node.id)
       ? selectedNodeIds.filter((selectedId) => {
-          const selectedNode = treeNodesRef.current.find((item) => item.id === selectedId);
+          const selectedNode = treeNodesRef.current.find(
+            (item) => item.id === selectedId,
+          );
           return selectedNode?.kind !== "root";
         })
       : [node.id];
@@ -1106,9 +1171,12 @@ export function WorkspaceShell({
     }
 
     const directDeleteNodes = directDeleteIds
-      .map((deleteId) => treeNodesRef.current.find((item) => item.id === deleteId))
+      .map((deleteId) =>
+        treeNodesRef.current.find((item) => item.id === deleteId),
+      )
       .filter((item): item is TreeNode => Boolean(item));
-    const nestedDeleteCount = cascadeDeleteIds.length - directDeleteNodes.length;
+    const nestedDeleteCount =
+      cascadeDeleteIds.length - directDeleteNodes.length;
     const confirmMessage =
       directDeleteNodes.length === 1
         ? nestedDeleteCount > 0
@@ -1134,10 +1202,11 @@ export function WorkspaceShell({
     setDeleteConfirmation(null);
 
     const fileNodesToDelete = cascadeDeleteIds
-      .map((deleteId) => treeNodesRef.current.find((item) => item.id === deleteId))
-      .filter(
-        (item): item is TreeNode =>
-          Boolean(item?.kind === "file" && item.fileStoragePath),
+      .map((deleteId) =>
+        treeNodesRef.current.find((item) => item.id === deleteId),
+      )
+      .filter((item): item is TreeNode =>
+        Boolean(item?.kind === "file" && item.fileStoragePath),
       );
 
     try {
@@ -1161,7 +1230,9 @@ export function WorkspaceShell({
           },
           method: "DELETE",
         });
-        const payload = (await response.json().catch(() => null)) as DeletePdfResponse | null;
+        const payload = (await response
+          .json()
+          .catch(() => null)) as DeletePdfResponse | null;
 
         if (!response.ok) {
           if (payload?.treeUpdated && payload.tree) {
@@ -1192,11 +1263,14 @@ export function WorkspaceShell({
       const nextActiveId =
         selectedNodeId && remainingSelectedIds.includes(selectedNodeId)
           ? selectedNodeId
-          : remainingSelectedIds.at(-1) ?? null;
+          : (remainingSelectedIds.at(-1) ?? null);
 
       syncSelectionState(nextNodes, remainingSelectedIds, nextActiveId);
 
-      if (selectionAnchorId && !nextNodes.some((item) => item.id === selectionAnchorId)) {
+      if (
+        selectionAnchorId &&
+        !nextNodes.some((item) => item.id === selectionAnchorId)
+      ) {
         setSelectionAnchorId(nextActiveId);
       }
     } catch (error) {
@@ -1241,9 +1315,7 @@ export function WorkspaceShell({
     });
   };
 
-  const handleUploadPdfFile = async (
-    event: ChangeEvent<HTMLInputElement>,
-  ) => {
+  const handleUploadPdfFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const [file] = Array.from(event.target.files ?? []);
     event.target.value = "";
 
@@ -1305,13 +1377,20 @@ export function WorkspaceShell({
         },
         method: "POST",
       });
-      const payload = (await response.json().catch(() => null)) as UploadPdfResponse | null;
+      const payload = (await response
+        .json()
+        .catch(() => null)) as UploadPdfResponse | null;
 
       if (!response.ok || !payload?.tree || !payload.fileNode) {
-        throw new Error(payload?.error || "Unable to upload PDF to Supabase Storage.");
+        throw new Error(
+          payload?.error || "Unable to upload PDF to Supabase Storage.",
+        );
       }
 
-      const shouldOpenParent = !parentHasChildren(treeNodesRef.current, pendingUploadParentId);
+      const shouldOpenParent = !parentHasChildren(
+        treeNodesRef.current,
+        pendingUploadParentId,
+      );
       const savedNodes = payload.tree;
       const fileId = payload.fileNode.id;
       setTreeNodes(savedNodes);
@@ -1320,7 +1399,9 @@ export function WorkspaceShell({
       if (shouldOpenParent) {
         expandedAncestorIds.add(pendingUploadParentId);
       }
-      setExpandedIds((current) => new Set([...current, ...expandedAncestorIds]));
+      setExpandedIds(
+        (current) => new Set([...current, ...expandedAncestorIds]),
+      );
       syncSelectionState(savedNodes, [fileId], fileId);
       setSelectionAnchorId(fileId);
       setUploadFeedback({
@@ -1397,26 +1478,26 @@ export function WorkspaceShell({
     void handleMenuAction(draftNoteNode.id, "delete");
   };
 
-  const handleGoogleSignIn = () => {
-    if (!supabase) {
-      return;
-    }
+  // const handleGoogleSignIn = () => {
+  //   if (!supabase) {
+  //     return;
+  //   }
 
-    void supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: window.location.href,
-      },
-    });
-  };
+  //   void supabase.auth.signInWithOAuth({
+  //     provider: "google",
+  //     options: {
+  //       redirectTo: window.location.href,
+  //     },
+  //   });
+  // };
 
-  const handleSignOut = () => {
-    if (!supabase) {
-      return;
-    }
+  // const handleSignOut = () => {
+  //   if (!supabase) {
+  //     return;
+  //   }
 
-    void supabase.auth.signOut();
-  };
+  //   void supabase.auth.signOut();
+  // };
 
   const handleChatSubmit = async () => {
     const trimmedInput = chatInput.trim();
@@ -1432,7 +1513,10 @@ export function WorkspaceShell({
     if (!supabase || authStatus !== "signed-in") {
       setMessagesForContext(sourceContextId, [
         ...nextMessages,
-        createMessage("assistant", "Sign in with Google to use the chat assistant."),
+        createMessage(
+          "assistant",
+          "Sign in with Google to use the chat assistant.",
+        ),
       ]);
       setChatInput("");
       return;
@@ -1468,38 +1552,58 @@ export function WorkspaceShell({
           activeNodeId: sourceContextId,
           classId,
           draftContext:
-            activeDraftContext?.nodeId === sourceContextId ? activeDraftContext : null,
+            activeDraftContext?.nodeId === sourceContextId
+              ? activeDraftContext
+              : null,
           messages: toChatRequestMessages(nextMessages),
         }),
       });
 
-      const payload = (await response.json().catch(() => null)) as ChatResponse | null;
+      const payload = (await response
+        .json()
+        .catch(() => null)) as ChatResponse | null;
 
       if (!response.ok || !payload?.assistant) {
-        throw new Error(payload?.error || "Unable to contact the chat assistant.");
+        throw new Error(
+          payload?.error || "Unable to contact the chat assistant.",
+        );
       }
-      const assistantMessage = createMessage("assistant", payload.assistant.message);
+      const assistantMessage = createMessage(
+        "assistant",
+        payload.assistant.message,
+      );
 
       if (payload.assistant.action === "reply") {
-        setMessagesForContext(sourceContextId, [...nextMessages, assistantMessage]);
+        setMessagesForContext(sourceContextId, [
+          ...nextMessages,
+          assistantMessage,
+        ]);
         return;
       }
 
-      const sourceNodes = getSelectableFiles(treeNodesRef.current, [sourceContextId]);
+      const sourceNodes = getSelectableFiles(treeNodesRef.current, [
+        sourceContextId,
+      ]);
 
       if (sourceNodes.length === 0) {
         throw new Error("No note or PDF is available for note generation.");
       }
 
       const shouldOverwriteCurrent =
-        payload.assistant.target === "current_note" && selectedNodeKind === "note";
+        payload.assistant.target === "current_note" &&
+        selectedNodeKind === "note";
 
       if (shouldOverwriteCurrent) {
-        setMessagesForContext(sourceContextId, [...nextMessages, assistantMessage]);
+        setMessagesForContext(sourceContextId, [
+          ...nextMessages,
+          assistantMessage,
+        ]);
       }
 
       await generateNoteFromSources({
-        chatSeedMessages: shouldOverwriteCurrent ? undefined : [userMessage, assistantMessage],
+        chatSeedMessages: shouldOverwriteCurrent
+          ? undefined
+          : [userMessage, assistantMessage],
         mode: shouldOverwriteCurrent ? "overwrite_note" : "new_note",
         prompt: payload.assistant.prompt,
         sourceNodes,
@@ -1515,7 +1619,9 @@ export function WorkspaceShell({
       setUploadFeedback({
         type: "error",
         message:
-          error instanceof Error ? error.message : "Unable to contact the chat assistant.",
+          error instanceof Error
+            ? error.message
+            : "Unable to contact the chat assistant.",
       });
     } finally {
       chatAbortControllerRef.current = null;
@@ -1533,7 +1639,7 @@ export function WorkspaceShell({
           : "Continue with Google";
 
   return (
-    <main className="workspace-shell flex h-screen flex-col overflow-hidden">
+    <main className='workspace-shell flex h-screen flex-col overflow-hidden'>
       <Topbar
         classId={classId}
         requestedClassId={requestedClassId}
@@ -1549,10 +1655,10 @@ export function WorkspaceShell({
       />
       <input
         ref={pdfUploadInputRef}
-        accept="application/pdf,.pdf"
-        className="hidden"
+        accept='application/pdf,.pdf'
+        className='hidden'
         onChange={handleUploadPdfFile}
-        type="file"
+        type='file'
       />
       <div
         className={`grid min-h-0 flex-1 grid-cols-1 transition-[grid-template-columns] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${isLeftPaneCollapsed ? "lg:grid-cols-[60px_minmax(0,1fr)]" : "lg:grid-cols-[250px_minmax(0,1fr)]"} ${desktopGridColumns}`}
@@ -1606,17 +1712,17 @@ export function WorkspaceShell({
           onBodyChange={handleBodyChange}
           onSave={handleSaveNote}
           onDelete={handleDeleteCurrentNote}
-          saveLabel="Save note"
-          titleLabel="Note title"
-          titlePlaceholder="Untitled note"
-          emptyStateTitle="No note selected"
-          emptyStateDescription="Create or select a note from the tree to start writing."
+          saveLabel='Save note'
+          titleLabel='Note title'
+          titlePlaceholder='Untitled note'
+          emptyStateTitle='No note selected'
+          emptyStateDescription='Create or select a note from the tree to start writing.'
         />
         {isChatOpen ? (
-          <div className="relative h-full min-h-0 min-w-0 overflow-hidden lg:col-span-2 xl:col-span-1">
+          <div className='relative h-full min-h-0 min-w-0 overflow-hidden lg:col-span-2 xl:col-span-1'>
             <ChatPane
               disabled={!activeAiContextId}
-              disabledMessage="Open a note or PDF to chat with StudyAI."
+              disabledMessage='Open a note or PDF to chat with StudyAI.'
               locked={lockIn}
               isStreaming={isChatStreaming}
               onHide={handleHideChat}
@@ -1631,48 +1737,48 @@ export function WorkspaceShell({
 
       {!isChatOpen ? (
         <button
-          className="fixed right-15 bottom-10 z-50 grid h-14 w-14 place-items-center rounded-full border border-(--border-strong) bg-(--main) text-(--text-contrast) shadow-(--shadow-accent) transition-transform duration-200 hover:scale-105 hover:shadow-(--shadow-accent-strong)"
+          className='fixed right-15 bottom-10 z-50 grid h-14 w-14 place-items-center rounded-full border border-(--border-strong) bg-(--main) text-(--text-contrast) shadow-(--shadow-accent) transition-transform duration-200 hover:scale-105 hover:shadow-(--shadow-accent-strong)'
           onClick={handleRestoreChat}
-          type="button"
-          aria-label="Show chat"
+          type='button'
+          aria-label='Show chat'
         >
-          <ChatBubbleLeftEllipsisIcon className="h-6 w-6" aria-hidden="true" />
+          <ChatBubbleLeftEllipsisIcon className='h-6 w-6' aria-hidden='true' />
         </button>
       ) : null}
 
       {deleteConfirmation ? (
         <div
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-(--overlay-scrim) p-4 backdrop-blur-sm"
+          aria-modal='true'
+          className='fixed inset-0 z-50 flex items-center justify-center bg-(--overlay-scrim) p-4 backdrop-blur-sm'
           onClick={() => setDeleteConfirmation(null)}
-          role="dialog"
+          role='dialog'
         >
           <div
-            className="w-full max-w-md rounded-3xl border border-(--border-floating) bg-(--surface-base) p-6 shadow-(--shadow-floating)"
+            className='w-full max-w-md rounded-3xl border border-(--border-floating) bg-(--surface-base) p-6 shadow-(--shadow-floating)'
             onClick={(event) => event.stopPropagation()}
           >
-            <p className="text-xs font-semibold uppercase tracking-widest text-(--text-muted)">
+            <p className='text-xs font-semibold uppercase tracking-widest text-(--text-muted)'>
               Confirm deletion
             </p>
-            <h2 className="mt-3 text-2xl font-semibold leading-tight text-(--text-main)">
+            <h2 className='mt-3 text-2xl font-semibold leading-tight text-(--text-main)'>
               {deleteConfirmation.message}
             </h2>
-            <p className="mt-3 text-sm leading-6 text-(--text-body)">
-              This action permanently removes the selected note, folder, or file from
-              this class workspace.
+            <p className='mt-3 text-sm leading-6 text-(--text-body)'>
+              This action permanently removes the selected note, folder, or file
+              from this class workspace.
             </p>
-            <div className="mt-6 flex items-center justify-end gap-3">
+            <div className='mt-6 flex items-center justify-end gap-3'>
               <button
-                className="rounded-full border border-(--border-soft) bg-(--surface-input) px-5 py-2.5 text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)"
+                className='rounded-full border border-(--border-soft) bg-(--surface-input) px-5 py-2.5 text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)'
                 onClick={() => setDeleteConfirmation(null)}
-                type="button"
+                type='button'
               >
                 Cancel
               </button>
               <button
-                className="rounded-full border border-(--destructive) bg-(--destructive) px-5 py-2.5 text-sm font-semibold text-(--destructive-foreground) transition-transform duration-200 hover:-translate-y-0.5"
+                className='rounded-full border border-(--destructive) bg-(--destructive) px-5 py-2.5 text-sm font-semibold text-(--destructive-foreground) transition-transform duration-200 hover:-translate-y-0.5'
                 onClick={() => void handleConfirmDelete()}
-                type="button"
+                type='button'
               >
                 Delete
               </button>

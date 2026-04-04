@@ -1,10 +1,10 @@
-import type { SupabaseClient, User } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeClassId } from "@/app/editor/class/[class-id]/_lib/workspace-data";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import type { AiMessage, AiPart } from "@/lib/ai/types";
 import type { TreeNode } from "@/lib/tree-repository";
 import {
-  getSupabaseServerClient,
+  createSupabaseServerClient,
   getSupabaseStorageBucket,
 } from "@/lib/supabase-server";
 
@@ -27,16 +27,16 @@ export function getBearerToken(request: Request) {
 }
 
 export async function getAuthenticatedAiRequest(request: Request) {
-  const supabase = getSupabaseServerClient();
-
-  if (!supabase) {
-    return { error: "Supabase auth is not configured.", status: 500 as const };
-  }
-
   const token = getBearerToken(request);
 
   if (!token) {
     return { error: "Unauthorized.", status: 401 as const };
+  }
+
+  const supabase = createSupabaseServerClient(token);
+
+  if (!supabase) {
+    return { error: "Supabase auth is not configured.", status: 500 as const };
   }
 
   const {
@@ -97,10 +97,9 @@ export function getNodeIds(value: unknown) {
 
 async function loadClassTree(
   supabase: SupabaseClient,
-  user: User,
   classId: string,
 ) {
-  const repository = new SupabaseTreeRepository(supabase, user.id);
+  const repository = new SupabaseTreeRepository(supabase);
   return repository.listTreeByClass(classId);
 }
 
@@ -140,15 +139,13 @@ export async function buildSourceContextParts({
   draftContext,
   nodeIds,
   supabase,
-  user,
 }: {
   classId: string;
   draftContext?: DraftNoteContext | null;
   nodeIds: string[];
   supabase: SupabaseClient;
-  user: User;
 }) {
-  const tree = await loadClassTree(supabase, user, classId);
+  const tree = await loadClassTree(supabase, classId);
   const sourceNodes = nodeIds.map((nodeId) => {
     const node = tree.find((item) => item.id === nodeId);
 

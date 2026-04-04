@@ -3,12 +3,12 @@
 import { DELETE, POST } from "./route";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import {
-  getSupabaseServerClient,
+  createSupabaseServerClient,
   getSupabaseStorageBucket,
 } from "@/lib/supabase-server";
 
 jest.mock("@/lib/supabase-server", () => ({
-  getSupabaseServerClient: jest.fn(),
+  createSupabaseServerClient: jest.fn(),
   getSupabaseStorageBucket: jest.fn(),
 }));
 
@@ -16,7 +16,7 @@ jest.mock("@/lib/supabase-tree-repository", () => ({
   SupabaseTreeRepository: jest.fn(),
 }));
 
-const mockedGetSupabaseServerClient = jest.mocked(getSupabaseServerClient);
+const mockedCreateSupabaseServerClient = jest.mocked(createSupabaseServerClient);
 const mockedGetSupabaseStorageBucket = jest.mocked(getSupabaseStorageBucket);
 const MockedSupabaseTreeRepository = jest.mocked(SupabaseTreeRepository);
 
@@ -71,7 +71,7 @@ describe("/api/uploads/pdf", () => {
   });
 
   test("POST rejects unauthenticated uploads", async () => {
-    mockedGetSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
 
     const response = await POST(createRequest());
 
@@ -81,8 +81,29 @@ describe("/api/uploads/pdf", () => {
     });
   });
 
+  test("POST returns 500 when Supabase auth config is missing", async () => {
+    mockedCreateSupabaseServerClient.mockReturnValue(null);
+
+    const formData = new FormData();
+    formData.append("classId", "cs101-ai");
+    formData.append("parentId", "root:cs101-ai");
+    formData.append("file", new File(["pdf"], "notes.pdf", { type: "application/pdf" }));
+
+    const response = await POST(
+      createRequest({
+        authorization: "Bearer token-123",
+        formData,
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Supabase storage is not configured.",
+    });
+  });
+
   test("POST rejects invalid classId", async () => {
-    mockedGetSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
 
     const formData = new FormData();
     formData.append("classId", "%%%");
@@ -101,7 +122,7 @@ describe("/api/uploads/pdf", () => {
   });
 
   test("POST rejects missing parentId", async () => {
-    mockedGetSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
 
     const formData = new FormData();
     formData.append("classId", "cs101-ai");
@@ -119,7 +140,7 @@ describe("/api/uploads/pdf", () => {
   });
 
   test("POST rejects invalid parentId format", async () => {
-    mockedGetSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
 
     const formData = new FormData();
     formData.append("classId", "cs101-ai");
@@ -138,7 +159,7 @@ describe("/api/uploads/pdf", () => {
   });
 
   test("POST rejects missing file", async () => {
-    mockedGetSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
 
     const formData = new FormData();
     formData.append("classId", "cs101-ai");
@@ -156,7 +177,7 @@ describe("/api/uploads/pdf", () => {
   });
 
   test("POST rejects non-pdf uploads", async () => {
-    mockedGetSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
 
     const formData = new FormData();
     formData.append("classId", "cs101-ai");
@@ -177,7 +198,7 @@ describe("/api/uploads/pdf", () => {
   });
 
   test("POST rejects uploads over the 50 MB limit", async () => {
-    mockedGetSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
 
     const file = new File(["pdf"], "big.pdf", { type: "application/pdf" });
     Object.defineProperty(file, "size", {
@@ -205,7 +226,7 @@ describe("/api/uploads/pdf", () => {
 
   test("POST rejects a parent that cannot contain files", async () => {
     const supabase = createSupabaseMock();
-    mockedGetSupabaseServerClient.mockReturnValue(supabase as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(supabase as never);
     MockedSupabaseTreeRepository.mockImplementation(
       () =>
         ({
@@ -259,7 +280,7 @@ describe("/api/uploads/pdf", () => {
   test("POST rejects a well-formed but unknown parentId", async () => {
     const supabase = createSupabaseMock();
     const replaceTree = jest.fn();
-    mockedGetSupabaseServerClient.mockReturnValue(supabase as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(supabase as never);
     MockedSupabaseTreeRepository.mockImplementation(
       () =>
         ({
@@ -299,7 +320,7 @@ describe("/api/uploads/pdf", () => {
 
   test("POST sanitizes filename, scopes storage path to the user, and returns saved tree", async () => {
     const supabase = createSupabaseMock();
-    mockedGetSupabaseServerClient.mockReturnValue(supabase as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(supabase as never);
     MockedSupabaseTreeRepository.mockImplementation(
       () =>
         ({
@@ -368,7 +389,8 @@ describe("/api/uploads/pdf", () => {
         upsert: false,
       }),
     );
-    expect(MockedSupabaseTreeRepository).toHaveBeenCalledWith(supabase, "user-123");
+    expect(mockedCreateSupabaseServerClient).toHaveBeenCalledWith("token-123");
+    expect(MockedSupabaseTreeRepository).toHaveBeenCalledWith(supabase);
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       fileNode: expect.objectContaining({
@@ -381,7 +403,7 @@ describe("/api/uploads/pdf", () => {
 
   test("POST rolls back the storage object when tree persistence fails", async () => {
     const supabase = createSupabaseMock();
-    mockedGetSupabaseServerClient.mockReturnValue(supabase as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(supabase as never);
     MockedSupabaseTreeRepository.mockImplementation(
       () =>
         ({
@@ -423,7 +445,7 @@ describe("/api/uploads/pdf", () => {
   });
 
   test("DELETE rejects unauthenticated requests", async () => {
-    mockedGetSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
 
     const response = await DELETE(createRequest());
 
@@ -434,7 +456,7 @@ describe("/api/uploads/pdf", () => {
   });
 
   test("DELETE rejects invalid nodeIds payloads", async () => {
-    mockedGetSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(createSupabaseMock() as never);
 
     const response = await DELETE(
       createRequest({
@@ -454,7 +476,7 @@ describe("/api/uploads/pdf", () => {
 
   test("DELETE deduplicates nodeIds before deleting", async () => {
     const supabase = createSupabaseMock();
-    mockedGetSupabaseServerClient.mockReturnValue(supabase as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(supabase as never);
     const replaceTree = jest.fn().mockResolvedValue([
       {
         classId: "cs101-ai",
@@ -518,7 +540,7 @@ describe("/api/uploads/pdf", () => {
 
   test("DELETE computes storage paths from repository state instead of client input", async () => {
     const supabase = createSupabaseMock();
-    mockedGetSupabaseServerClient.mockReturnValue(supabase as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(supabase as never);
     MockedSupabaseTreeRepository.mockImplementation(
       () =>
         ({
@@ -584,7 +606,7 @@ describe("/api/uploads/pdf", () => {
     supabase.storage.from().remove.mockResolvedValue({
       error: { message: "remove failed" },
     });
-    mockedGetSupabaseServerClient.mockReturnValue(supabase as never);
+    mockedCreateSupabaseServerClient.mockReturnValue(supabase as never);
     MockedSupabaseTreeRepository.mockImplementation(
       () =>
         ({

@@ -1,4 +1,12 @@
 import { SupabaseTreeRepository } from "./supabase-tree-repository";
+import type { NoteDocument } from "./note-document";
+
+function createParagraphDocument(text: string): NoteDocument {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
 
 type TreeRow = Record<string, unknown> & {
   class_id: string;
@@ -9,7 +17,8 @@ type TreeRow = Record<string, unknown> & {
 };
 
 type NoteRow = Record<string, unknown> & {
-  body: string;
+  content_json: NoteDocument;
+  content_version: number;
   id: string;
   title: string;
   user_id: string;
@@ -113,9 +122,9 @@ function createFakeClient(userId = "user-123") {
           upsert: async (nextRows: Omit<TreeRow, "user_id">[]) => {
             nextRows.forEach((row) => {
               const fullRow = {
-                ...row,
+                ...(row as unknown as TreeRow),
                 user_id: userId,
-              };
+              } as TreeRow;
               const index = treeRows.findIndex(
                 (candidate) =>
                   candidate.user_id === fullRow.user_id && candidate.id === fullRow.id,
@@ -140,9 +149,9 @@ function createFakeClient(userId = "user-123") {
           upsert: async (nextRows: Omit<NoteRow, "user_id">[]) => {
             nextRows.forEach((row) => {
               const fullRow = {
-                ...row,
+                ...(row as unknown as NoteRow),
                 user_id: userId,
-              };
+              } as NoteRow;
               const index = noteRows.findIndex(
                 (candidate) =>
                   candidate.user_id === fullRow.user_id && candidate.id === fullRow.id,
@@ -214,7 +223,8 @@ describe("SupabaseTreeRepository", () => {
       },
     );
     fakeClient.noteRows.push({
-      body: "<p>Hello</p>",
+      content_json: createParagraphDocument("Hello"),
+      content_version: 1,
       created_at: "2026-04-02T00:00:00.000Z",
       id: "note-1",
       title: "Fresh title",
@@ -233,13 +243,96 @@ describe("SupabaseTreeRepository", () => {
           kind: "root",
         }),
         expect.objectContaining({
-          body: "<p>Hello</p>",
+          contentJson: createParagraphDocument("Hello"),
           id: "node-1",
           noteId: "note-1",
           title: "Fresh title",
           updatedAt: "2026-04-03T00:00:00.000Z",
         }),
       ]),
+    );
+  });
+
+  test("listTreeByClass can load note metadata without content", async () => {
+    const fakeClient = createFakeClient();
+    fakeClient.treeRows.push(
+      {
+        class_id: "cs101-ai",
+        created_at: "2026-04-02T00:00:00.000Z",
+        file_mime_type: null,
+        file_size: null,
+        file_storage_path: null,
+        id: "root:cs101-ai",
+        kind: "root",
+        note_id: null,
+        order_index: 0,
+        parent_id: null,
+        title: "cs101-ai",
+        updated_at: "2026-04-02T00:00:00.000Z",
+        user_id: "user-123",
+      },
+      {
+        class_id: "cs101-ai",
+        created_at: "2026-04-02T00:00:00.000Z",
+        file_mime_type: null,
+        file_size: null,
+        file_storage_path: null,
+        id: "node-1",
+        kind: "note",
+        note_id: "note-1",
+        order_index: 1,
+        parent_id: "root:cs101-ai",
+        title: null,
+        updated_at: "2026-04-02T00:00:00.000Z",
+        user_id: "user-123",
+      },
+    );
+    fakeClient.noteRows.push({
+      content_json: createParagraphDocument("Hello"),
+      content_version: 1,
+      created_at: "2026-04-02T00:00:00.000Z",
+      id: "note-1",
+      title: "Fresh title",
+      updated_at: "2026-04-03T00:00:00.000Z",
+      user_id: "user-123",
+    });
+    const repository = new SupabaseTreeRepository(fakeClient as never);
+
+    const nodes = await repository.listTreeByClass("cs101-ai", {
+      includeNoteContent: false,
+    });
+
+    expect(nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          contentJson: undefined,
+          id: "node-1",
+          title: "Fresh title",
+          updatedAt: "2026-04-03T00:00:00.000Z",
+        }),
+      ]),
+    );
+  });
+
+  test("loadNoteById returns targeted note content", async () => {
+    const fakeClient = createFakeClient();
+    fakeClient.noteRows.push({
+      content_json: createParagraphDocument("Target body"),
+      content_version: 1,
+      created_at: "2026-04-02T00:00:00.000Z",
+      id: "note-1",
+      title: "Target note",
+      updated_at: "2026-04-03T00:00:00.000Z",
+      user_id: "user-123",
+    });
+    const repository = new SupabaseTreeRepository(fakeClient as never);
+
+    await expect(repository.loadNoteById("cs101-ai", "note-1")).resolves.toEqual(
+      expect.objectContaining({
+        content_json: createParagraphDocument("Target body"),
+        id: "note-1",
+        title: "Target note",
+      }),
     );
   });
 
@@ -279,7 +372,8 @@ describe("SupabaseTreeRepository", () => {
     );
     fakeClient.noteRows.push(
       {
-        body: "<p>Old body</p>",
+        content_json: createParagraphDocument("Old body"),
+        content_version: 1,
         created_at: "2026-04-01T00:00:00.000Z",
         id: "stale-note",
         title: "Old note",
@@ -287,7 +381,8 @@ describe("SupabaseTreeRepository", () => {
         user_id: "user-123",
       },
       {
-        body: "<p>Other body</p>",
+        content_json: createParagraphDocument("Other body"),
+        content_version: 1,
         created_at: "2026-04-01T00:00:00.000Z",
         id: "other-note",
         title: "Other note",
@@ -309,8 +404,8 @@ describe("SupabaseTreeRepository", () => {
         updatedAt: "2026-04-02T00:00:00.000Z",
       },
       {
-        body: "<p>Hello</p>",
         classId: "cs101-ai",
+        contentJson: createParagraphDocument("Hello"),
         createdAt: "2026-04-02T00:00:00.000Z",
         id: "node-1",
         kind: "note",
@@ -339,7 +434,8 @@ describe("SupabaseTreeRepository", () => {
     expect(fakeClient.noteRows).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          body: "<p>Hello</p>",
+          content_json: createParagraphDocument("Hello"),
+          content_version: 1,
           id: "note-1",
           title: "Fresh note",
         }),
@@ -355,5 +451,85 @@ describe("SupabaseTreeRepository", () => {
       ),
     ).toBeUndefined();
     expect(fakeClient.noteRows.find((row) => row.id === "stale-note")).toBeUndefined();
+  });
+
+  test("replaceTree preserves unloaded note bodies", async () => {
+    const fakeClient = createFakeClient();
+    fakeClient.treeRows.push(
+      {
+        class_id: "cs101-ai",
+        created_at: "2026-04-01T00:00:00.000Z",
+        file_mime_type: null,
+        file_size: null,
+        file_storage_path: null,
+        id: "root:cs101-ai",
+        kind: "root",
+        note_id: null,
+        order_index: 0,
+        parent_id: null,
+        title: "cs101-ai",
+        updated_at: "2026-04-01T00:00:00.000Z",
+        user_id: "user-123",
+      },
+      {
+        class_id: "cs101-ai",
+        created_at: "2026-04-01T00:00:00.000Z",
+        file_mime_type: null,
+        file_size: null,
+        file_storage_path: null,
+        id: "node-1",
+        kind: "note",
+        note_id: "note-1",
+        order_index: 1,
+        parent_id: "root:cs101-ai",
+        title: null,
+        updated_at: "2026-04-01T00:00:00.000Z",
+        user_id: "user-123",
+      },
+    );
+    fakeClient.noteRows.push({
+      content_json: createParagraphDocument("Keep me"),
+      content_version: 1,
+      created_at: "2026-04-01T00:00:00.000Z",
+      id: "note-1",
+      title: "Existing note",
+      updated_at: "2026-04-01T00:00:00.000Z",
+      user_id: "user-123",
+    });
+    const repository = new SupabaseTreeRepository(fakeClient as never);
+
+    await repository.replaceTree("cs101-ai", [
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "root:cs101-ai",
+        kind: "root",
+        order: 0,
+        parentId: null,
+        title: "cs101-ai",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "node-1",
+        kind: "note",
+        noteId: "note-1",
+        order: 1,
+        parentId: "root:cs101-ai",
+        title: "Existing note",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+    ]);
+
+    expect(fakeClient.noteRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content_json: createParagraphDocument("Keep me"),
+          id: "note-1",
+          title: "Existing note",
+        }),
+      ]),
+    );
   });
 });

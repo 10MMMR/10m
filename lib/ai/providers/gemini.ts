@@ -13,6 +13,10 @@ type GeminiGenerateResponse = {
   }>;
 };
 
+function logGeminiError(context: string, details: Record<string, unknown>) {
+  console.error(`Gemini error: ${context}`, details);
+}
+
 function getGeminiApiKey() {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
 
@@ -82,24 +86,46 @@ export function createGeminiProvider(): AiProvider {
     async generateText(input) {
       const config = getAiConfig();
       const apiKey = getGeminiApiKey();
+      const requestBody = buildGeminiRequestBody(input);
       const response = await fetch(`${GEMINI_API_URL}/${config.model}:generateContent`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-goog-api-key": apiKey,
         },
-        body: JSON.stringify(buildGeminiRequestBody(input)),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
+        logGeminiError("request failed", {
+          model: config.model,
+          responseBodyLength: errorText.length,
+          status: response.status,
+          statusText: response.statusText,
+        });
         throw new Error(errorText || "Gemini request failed.");
       }
 
-      const payload = (await response.json()) as GeminiGenerateResponse;
+      let payload: GeminiGenerateResponse;
+
+      try {
+        payload = (await response.json()) as GeminiGenerateResponse;
+      } catch (error) {
+        logGeminiError("invalid JSON response", {
+          error: error instanceof Error ? error.message : String(error),
+          model: config.model,
+        });
+        throw new Error("Gemini returned invalid JSON.");
+      }
+
       const text = extractText(payload);
 
       if (!text) {
+        logGeminiError("empty response", {
+          candidateCount: payload.candidates?.length ?? 0,
+          model: config.model,
+        });
         throw new Error("Gemini returned an empty response.");
       }
 

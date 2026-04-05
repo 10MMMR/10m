@@ -21,6 +21,12 @@ import {
 import { Topbar } from "./topbar";
 import { getWorkspaceSeed, type Message } from "../_lib/workspace-data";
 import type { AssistantCommand } from "@/lib/ai/assistant-contract";
+import {
+  EMPTY_NOTE_DOCUMENT,
+  parseNoteDocument,
+  serializeNoteDocumentForComparison,
+  type NoteDocument,
+} from "@/lib/note-document";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import {
@@ -52,8 +58,9 @@ const STORAGE_NOT_CONFIGURED_MESSAGE = "Supabase storage is not configured.";
 
 type WorkspaceShellProps = {
   classId: string;
+  imageStorageBucket: string | null;
+  pdfStorageBucket: string | null;
   requestedClassId: string;
-  storageBucket: string | null;
   usedFallback: boolean;
 };
 
@@ -73,6 +80,16 @@ type UploadPdfResponse = {
   fileNode?: TreeNode;
   tree?: TreeNode[];
 };
+
+type UploadImageResponse = {
+  error?: string;
+  fileName?: string;
+  mimeType?: string;
+  signedUrl?: string;
+  storagePath?: string;
+};
+
+const IMAGE_SIGNED_URL_TTL_SECONDS = 60 * 5;
 
 type DeletePdfResponse = {
   error?: string;
@@ -96,10 +113,16 @@ type ChatRequestMessage = {
   content: string;
 };
 
+type InvalidNoteDocumentLogPayload = {
+  classId: string;
+  error: string;
+  noteId: string;
+};
+
 type DraftNoteContext = {
   nodeId: string;
   title: string;
-  body: string;
+  contentJson: NoteDocument;
 };
 
 type ChatResponse = {
@@ -108,8 +131,8 @@ type ChatResponse = {
 };
 
 type GenerateNoteResponse = {
+  contentJson?: NoteDocument;
   error?: string;
-  html?: string;
   title?: string;
 };
 
@@ -148,7 +171,7 @@ function createMessage(
 function toChatRequestMessages(messages: Message[]): ChatRequestMessage[] {
   return messages
     .map((message) => ({
-      role: message.side === "assistant" ? "assistant" : "user",
+      role: (message.side === "assistant" ? "assistant" : "user") as ChatRequestMessage["role"],
       content: message.text.trim(),
     }))
     .filter((message) => message.content.length > 0);
@@ -156,13 +179,122 @@ function toChatRequestMessages(messages: Message[]): ChatRequestMessage[] {
 
 function buildUpdatedNote(
   node: TreeNode,
-  updates: Partial<Pick<TreeNode, "title" | "body">>,
+  updates: Partial<Pick<TreeNode, "contentJson" | "title">>,
+  options?: {
+    touchUpdatedAt?: boolean;
+  },
 ) {
   return {
     ...node,
     ...updates,
-    updatedAt: new Date().toISOString(),
+    updatedAt:
+      options?.touchUpdatedAt === false ? node.updatedAt : new Date().toISOString(),
   };
+}
+
+function mapNoteDocument(
+  node: NoteDocument,
+  mapper: (node: NoteDocument) => NoteDocument,
+): NoteDocument {
+  const nextNode = mapper(node);
+
+  if (!nextNode.content?.length) {
+    return nextNode;
+  }
+
+  const nextContent = nextNode.content.map((child) => mapNoteDocument(child, mapper));
+
+  return {
+    ...nextNode,
+    content: nextContent,
+  };
+}
+
+function collectImageStoragePaths(document: NoteDocument) {
+  const storagePaths = new Set<string>();
+
+  mapNoteDocument(document, (node) => {
+    if (
+      (node.type === "image" || node.type === "inlineImage") &&
+      typeof node.attrs?.storagePath === "string" &&
+      node.attrs.storagePath.length > 0
+    ) {
+      storagePaths.add(node.attrs.storagePath);
+    }
+
+    return node;
+  });
+
+  return Array.from(storagePaths);
+}
+
+function replaceImageSources(
+  document: NoteDocument,
+  signedUrlByPath: Map<string, string>,
+) {
+  let changed = false;
+
+  const nextDocument = mapNoteDocument(document, (node) => {
+    if (node.type !== "image" && node.type !== "inlineImage") {
+      return node;
+    }
+
+    const storagePath = node.attrs?.storagePath;
+
+    if (typeof storagePath !== "string" || storagePath.length === 0) {
+      return node;
+    }
+
+    const nextSrc = signedUrlByPath.get(storagePath);
+
+    if (!nextSrc || node.attrs?.src === nextSrc) {
+      return node;
+    }
+
+    changed = true;
+
+    return {
+      ...node,
+      attrs: {
+        ...node.attrs,
+        src: nextSrc,
+      },
+    };
+  });
+
+  return changed ? nextDocument : document;
+}
+
+function sanitizeImageSourcesForPersistence(document: NoteDocument) {
+  let changed = false;
+
+  const nextDocument = mapNoteDocument(document, (node) => {
+    if (node.type !== "image" && node.type !== "inlineImage") {
+      return node;
+    }
+
+    const storagePath = node.attrs?.storagePath;
+
+    if (typeof storagePath !== "string" || storagePath.length === 0) {
+      return node;
+    }
+
+    if (node.attrs?.src === storagePath) {
+      return node;
+    }
+
+    changed = true;
+
+    return {
+      ...node,
+      attrs: {
+        ...node.attrs,
+        src: storagePath,
+      },
+    };
+  });
+
+  return changed ? nextDocument : document;
 }
 
 function isPdfFile(file: File) {
@@ -250,27 +382,48 @@ function buildGeneratedNoteTitle(
   return `Study Notes - ${firstNode.title} + ${sourceNodes.length - 1} more`;
 }
 
-function buildGeneratingNoteHtml() {
-  return "<p><strong>Generating study notes...</strong></p><p>StudyAI is building a structured note from the selected material.</p>";
+function buildGeneratingNoteDocument(): NoteDocument {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", marks: [{ type: "bold" }], text: "Generating study notes..." }],
+      },
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "text",
+            text: "StudyAI is building a structured note from the selected material.",
+          },
+        ],
+      },
+    ],
+  };
 }
 
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function buildGenerationFailureHtml(message: string) {
-  return `<p><strong>Unable to generate note.</strong></p><p>${escapeHtml(message)}</p>`;
+function buildGenerationFailureDocument(message: string): NoteDocument {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", marks: [{ type: "bold" }], text: "Unable to generate note." }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: message }],
+      },
+    ],
+  };
 }
 
 export function WorkspaceShell({
   classId,
+  imageStorageBucket,
+  pdfStorageBucket,
   requestedClassId,
-  storageBucket,
   usedFallback,
 }: WorkspaceShellProps) {
   const workspace = getWorkspaceSeed(classId);
@@ -314,6 +467,7 @@ export function WorkspaceShell({
   );
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [selectedPdfUrl, setSelectedPdfUrl] = useState<string | null>(null);
+  const [isLoadingSelectedNote, setIsLoadingSelectedNote] = useState(false);
   const pendingSignInUiResetUserIdRef = useRef<string | null>(null);
   const restoredTreeUiStateKeyRef = useRef<string | null>(null);
   const [pendingUploadParentId, setPendingUploadParentId] = useState<
@@ -380,9 +534,22 @@ export function WorkspaceShell({
     return {
       nodeId: draftNoteNode.id,
       title: draftNoteNode.title,
-      body: draftNoteNode.body || "<p></p>",
+      contentJson: draftNoteNode.contentJson ?? EMPTY_NOTE_DOCUMENT,
     } satisfies DraftNoteContext;
   }, [draftNoteNode]);
+  const draftNoteId = draftNoteNode?.kind === "note" ? draftNoteNode.id : null;
+  const draftNoteImageStoragePaths = useMemo(() => {
+    if (!draftNoteNode || draftNoteNode.kind !== "note") {
+      return [];
+    }
+
+    return collectImageStoragePaths(draftNoteNode.contentJson ?? EMPTY_NOTE_DOCUMENT);
+  }, [draftNoteNode]);
+  const draftNoteImageStoragePathKey = useMemo(
+    () => draftNoteImageStoragePaths.join("|"),
+    [draftNoteImageStoragePaths],
+  );
+  const draftNoteImageStoragePathsRef = useRef(draftNoteImageStoragePaths);
 
   const resetWorkspaceState = useCallback(() => {
     setTreeNodes([]);
@@ -391,6 +558,7 @@ export function WorkspaceShell({
     setSelectedNodeKind(null);
     setSelectionAnchorId(null);
     setDraftNoteNode(null);
+    setIsLoadingSelectedNote(false);
     setExpandedIds(new Set());
     setSelectedPdfUrl(null);
     setIsDirty(false);
@@ -404,12 +572,35 @@ export function WorkspaceShell({
       resetWorkspaceState();
       return [];
     }
-
-    const nodes = await treeRepository.current.listTreeByClass(classId);
+    const nodes = await treeRepository.current.listTreeByClass(classId, {
+      includeNoteContent: false,
+    });
     setTreeNodes(nodes);
     treeNodesRef.current = nodes;
     return nodes;
   }, [authUser, classId, resetWorkspaceState]);
+
+  const logInvalidNoteDocument = useCallback(async ({
+    classId,
+    error,
+    noteId,
+  }: InvalidNoteDocumentLogPayload) => {
+    try {
+      await fetch("/api/editor/log-invalid-document", {
+        body: JSON.stringify({
+          classId,
+          error,
+          noteId,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+    } catch {
+      // Logging should never block the editor from loading.
+    }
+  }, []);
 
   const persistTree = useCallback(
     async (nextNodes: TreeNode[]) => {
@@ -465,7 +656,6 @@ export function WorkspaceShell({
       if (activeNode?.kind === "note") {
         setDraftNoteNode({
           ...activeNode,
-          body: activeNode.body || "<p></p>",
         });
       } else {
         setDraftNoteNode(null);
@@ -475,6 +665,83 @@ export function WorkspaceShell({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!treeRepository.current || selectedNodeKind !== "note" || !selectedNodeId) {
+      setIsLoadingSelectedNote(false);
+      return;
+    }
+
+    const selectedNote = treeNodes.find((node) => node.id === selectedNodeId);
+
+    if (!selectedNote || selectedNote.kind !== "note") {
+      setIsLoadingSelectedNote(false);
+      return;
+    }
+
+    if (selectedNote.contentJson !== undefined) {
+      setIsLoadingSelectedNote(false);
+      return;
+    }
+
+    if (!selectedNote.noteId) {
+      setIsLoadingSelectedNote(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingSelectedNote(true);
+
+    void treeRepository.current.loadNoteById(classId, selectedNote.noteId, {
+      onInvalidNoteDocument: logInvalidNoteDocument,
+    }).then((loadedNote) => {
+      if (cancelled) {
+        return;
+      }
+
+      if (!loadedNote?.content_json) {
+        throw new Error("Unable to load note.");
+      }
+
+      const hydratedNote: TreeNode = {
+        ...selectedNote,
+        contentJson: loadedNote.content_json,
+        createdAt: loadedNote.created_at,
+        title: loadedNote.title,
+        updatedAt: loadedNote.updated_at,
+      };
+
+      setTreeNodes((current) => {
+        const nextNodes = updateNodeInTree(current, hydratedNote);
+        treeNodesRef.current = nextNodes;
+        return nextNodes;
+      });
+      setDraftNoteNode((current) =>
+        current?.kind === "note" && current.id === hydratedNote.id ? hydratedNote : current,
+      );
+      setIsLoadingSelectedNote(false);
+    }).catch((error) => {
+      if (cancelled) {
+        return;
+      }
+
+      setIsLoadingSelectedNote(false);
+      setUploadFeedback({
+        type: "error",
+        message: error instanceof Error ? error.message : "Unable to load note.",
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    classId,
+    logInvalidNoteDocument,
+    selectedNodeId,
+    selectedNodeKind,
+    treeNodes,
+  ]);
 
   const setMessagesForContext = useCallback(
     (contextId: string, nextMessages: Message[]) => {
@@ -725,7 +992,7 @@ export function WorkspaceShell({
   }, [authStatus, authUser, classId, syncSelectionState, treeNodes]);
 
   useEffect(() => {
-    if (!supabase || !storageBucket || !selectedFileNode?.fileStoragePath) {
+    if (!supabase || !pdfStorageBucket || !selectedFileNode?.fileStoragePath) {
       setSelectedPdfUrl(null);
       return;
     }
@@ -733,11 +1000,8 @@ export function WorkspaceShell({
     let cancelled = false;
 
     void supabase.storage
-      .from(storageBucket)
-      .createSignedUrl(
-        selectedFileNode.fileStoragePath,
-        PDF_SIGNED_URL_TTL_SECONDS,
-      )
+      .from(pdfStorageBucket)
+      .createSignedUrl(selectedFileNode.fileStoragePath, PDF_SIGNED_URL_TTL_SECONDS)
       .then(({ data, error }) => {
         if (cancelled) {
           return;
@@ -758,7 +1022,83 @@ export function WorkspaceShell({
     return () => {
       cancelled = true;
     };
-  }, [selectedFileNode, storageBucket, supabase]);
+  }, [pdfStorageBucket, selectedFileNode, supabase]);
+
+  useEffect(() => {
+    draftNoteImageStoragePathsRef.current = draftNoteImageStoragePaths;
+  }, [draftNoteImageStoragePathKey, draftNoteImageStoragePaths]);
+
+  useEffect(() => {
+    if (!supabase || !imageStorageBucket || !draftNoteId) {
+      return;
+    }
+
+    const storagePaths = draftNoteImageStoragePathsRef.current;
+
+    if (storagePaths.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void supabase.storage
+      .from(imageStorageBucket)
+      .createSignedUrls(storagePaths, IMAGE_SIGNED_URL_TTL_SECONDS)
+      .then(({ data, error }) => {
+        if (cancelled || error || !data) {
+          return;
+        }
+
+        const signedUrlByPath = new Map<string, string>();
+
+        data.forEach((entry, index) => {
+          const storagePath = storagePaths[index];
+
+          if (storagePath && entry?.signedUrl) {
+            signedUrlByPath.set(storagePath, entry.signedUrl);
+          }
+        });
+
+        if (signedUrlByPath.size === 0) {
+          return;
+        }
+
+        setDraftNoteNode((current) => {
+          if (!current || current.kind !== "note" || current.id !== draftNoteId) {
+            return current;
+          }
+
+          const currentDocument = current.contentJson ?? EMPTY_NOTE_DOCUMENT;
+          const nextDocument = replaceImageSources(currentDocument, signedUrlByPath);
+
+          if (
+            serializeNoteDocumentForComparison(currentDocument) ===
+            serializeNoteDocumentForComparison(nextDocument)
+          ) {
+            return current;
+          }
+
+          return buildUpdatedNote(
+            current,
+            {
+              contentJson: nextDocument,
+            },
+            {
+              touchUpdatedAt: false,
+            },
+          );
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    draftNoteId,
+    draftNoteImageStoragePathKey,
+    imageStorageBucket,
+    supabase,
+  ]);
 
   const handleHideChat = () => {
     if (isChatOpen) {
@@ -841,30 +1181,43 @@ export function WorkspaceShell({
 
   const persistNoteNode = useCallback(
     async (node: TreeNode) => {
-      const savedNodes = await persistTree(
-        updateNodeInTree(treeNodesRef.current, node),
-      );
-      syncSelectionState(savedNodes, [node.id], node.id);
-      setSelectionAnchorId(node.id);
+      const noteToPersist =
+        node.kind === "note"
+          ? {
+              ...node,
+              contentJson: sanitizeImageSourcesForPersistence(
+                node.contentJson ?? EMPTY_NOTE_DOCUMENT,
+              ),
+            }
+          : node;
+
+      const savedNodes = await persistTree(updateNodeInTree(treeNodesRef.current, noteToPersist));
+      syncSelectionState(savedNodes, [noteToPersist.id], noteToPersist.id);
+      setSelectionAnchorId(noteToPersist.id);
       setIsDirty(false);
 
-      return savedNodes.find((item) => item.id === node.id) ?? node;
+      return savedNodes.find((item) => item.id === noteToPersist.id) ?? noteToPersist;
     },
     [persistTree, syncSelectionState],
   );
 
-  const setDraftNoteContent = useCallback(
-    (noteId: string, title: string, body: string) => {
-      setDraftNoteNode((current) => {
-        if (!current || current.kind !== "note" || current.id !== noteId) {
-          return current;
-        }
+  const setDraftNoteContent = useCallback((
+    noteId: string,
+    title: string,
+    contentJson: NoteDocument,
+  ) => {
+    setDraftNoteNode((current) => {
+      if (!current || current.kind !== "note" || current.id !== noteId) {
+        return current;
+      }
 
-        return buildUpdatedNote(current, { body, title });
-      });
-    },
-    [],
-  );
+      return buildUpdatedNote(
+        current,
+        { contentJson, title },
+        { touchUpdatedAt: false },
+      );
+    });
+  }, []);
 
   const createNoteUnderParent = async (
     parentId: string,
@@ -1026,7 +1379,7 @@ export function WorkspaceShell({
     }
 
     let effectiveMode = mode;
-    let targetNode =
+    let targetNode: TreeNode | null =
       effectiveMode === "overwrite_note" && targetNoteId
         ? (treeNodesRef.current.find((node) => node.id === targetNoteId) ??
           null)
@@ -1039,10 +1392,10 @@ export function WorkspaceShell({
 
     if (!targetNode || targetNode.kind !== "note") {
       effectiveMode = "new_note";
-      targetNode = await createNoteUnderParent(rootNode.id, {
+      targetNode = (await createNoteUnderParent(rootNode.id, {
         markDirty: false,
         title: fallbackTitle,
-      });
+      })) ?? null;
 
       if (!targetNode || targetNode.kind !== "note") {
         throw new Error("Unable to create a note for AI generation.");
@@ -1053,8 +1406,7 @@ export function WorkspaceShell({
       }
     }
 
-    const generatingBody = buildGeneratingNoteHtml();
-    setDraftNoteContent(targetNode.id, fallbackTitle, generatingBody);
+    setDraftNoteContent(targetNode.id, fallbackTitle, buildGeneratingNoteDocument());
     setIsDirty(false);
 
     const response = await fetch("/api/notes/generate", {
@@ -1081,10 +1433,10 @@ export function WorkspaceShell({
       .json()
       .catch(() => null)) as GenerateNoteResponse | null;
 
-    if (!response.ok || !payload?.html) {
+    if (!response.ok || !payload?.contentJson) {
       const errorMessage = payload?.error || "Unable to generate note.";
       const failedNode = buildUpdatedNote(targetNode, {
-        body: buildGenerationFailureHtml(errorMessage),
+        contentJson: buildGenerationFailureDocument(errorMessage),
         title: fallbackTitle,
       });
       await persistNoteNode(failedNode);
@@ -1092,7 +1444,7 @@ export function WorkspaceShell({
     }
 
     const completedNode = buildUpdatedNote(targetNode, {
-      body: payload.html,
+      contentJson: parseNoteDocument(payload.contentJson),
       title: payload.title?.trim() || fallbackTitle,
     });
 
@@ -1347,7 +1699,7 @@ export function WorkspaceShell({
       return;
     }
 
-    if (!supabase || !storageBucket) {
+    if (!supabase || !pdfStorageBucket) {
       setUploadFeedback({
         type: "error",
         message: STORAGE_NOT_CONFIGURED_MESSAGE,
@@ -1428,23 +1780,76 @@ export function WorkspaceShell({
         return current;
       }
 
-      const next = buildUpdatedNote(current, { title });
+      const next = buildUpdatedNote(current, { title }, { touchUpdatedAt: false });
       setIsDirty(true);
       return next;
     });
   };
 
-  const handleBodyChange = (body: string) => {
+  const handleBodyChange = (contentJson: NoteDocument) => {
     setDraftNoteNode((current) => {
-      if (!current || current.kind !== "note" || current.body === body) {
+      if (!current || current.kind !== "note") {
         return current;
       }
 
-      const next = buildUpdatedNote(current, { body });
+      if (
+        serializeNoteDocumentForComparison(current.contentJson ?? EMPTY_NOTE_DOCUMENT) ===
+        serializeNoteDocumentForComparison(contentJson)
+      ) {
+        return current;
+      }
+
+      const next = buildUpdatedNote(current, { contentJson }, { touchUpdatedAt: false });
       setIsDirty(true);
       return next;
     });
   };
+
+  const handleUploadImage = useCallback(
+    async (file: File, noteId: string) => {
+      if (!authUser) {
+        throw new Error(AUTH_REQUIRED_MESSAGE);
+      }
+
+      if (!imageStorageBucket) {
+        throw new Error(STORAGE_NOT_CONFIGURED_MESSAGE);
+      }
+
+      const accessToken = await getAccessToken();
+
+      if (!accessToken) {
+        throw new Error(AUTH_REQUIRED_MESSAGE);
+      }
+
+      const formData = new FormData();
+      formData.append("classId", classId);
+      formData.append("noteId", noteId);
+      formData.append("file", file);
+
+      const response = await fetch("/api/uploads/image", {
+        body: formData,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        method: "POST",
+      });
+      const payload = (await response.json().catch(() => null)) as UploadImageResponse | null;
+
+      if (!response.ok || !payload?.signedUrl || !payload.storagePath) {
+        throw new Error(payload?.error || "Unable to upload image.");
+      }
+
+      return {
+        alt: payload.fileName ?? file.name,
+        mimeType: payload.mimeType ?? file.type ?? null,
+        src: payload.signedUrl,
+        storagePath: payload.storagePath,
+        title: payload.fileName ?? file.name,
+        width: null,
+      };
+    },
+    [authUser, classId, getAccessToken, imageStorageBucket],
+  );
 
   const handleSaveNote = async () => {
     if (!draftNoteNode || draftNoteNode.kind !== "note") {
@@ -1452,14 +1857,32 @@ export function WorkspaceShell({
     }
 
     try {
+      const currentDraft = draftNoteNode;
+      const persistedContentJson = sanitizeImageSourcesForPersistence(
+        currentDraft.contentJson ?? EMPTY_NOTE_DOCUMENT,
+      );
       const savedNodes = await persistTree(
         updateNodeInTree(treeNodesRef.current, {
-          ...draftNoteNode,
-          body: draftNoteNode.body || "<p></p>",
+          ...currentDraft,
+          contentJson: persistedContentJson,
         }),
       );
 
-      syncSelectionState(savedNodes, [draftNoteNode.id], draftNoteNode.id);
+      syncSelectionState(savedNodes, [currentDraft.id], currentDraft.id);
+      setDraftNoteNode((current) => {
+        if (!current || current.kind !== "note" || current.id !== currentDraft.id) {
+          return current;
+        }
+
+        return buildUpdatedNote(
+          current,
+          {
+            contentJson: currentDraft.contentJson ?? EMPTY_NOTE_DOCUMENT,
+            title: currentDraft.title,
+          },
+          { touchUpdatedAt: false },
+        );
+      });
       setIsDirty(false);
     } catch (error) {
       setUploadFeedback({
@@ -1653,6 +2076,24 @@ export function WorkspaceShell({
         onSignIn={handleGoogleSignIn}
         onSignOut={handleSignOut}
       />
+      {isUploadingPdf || uploadFeedback ? (
+        <div className="border-b border-(--border-soft) bg-(--surface-panel-strong) px-4 py-2">
+          <p
+            className={`text-sm ${
+              uploadFeedback?.type === "error"
+                ? "text-(--accent)"
+                : uploadFeedback?.type === "success"
+                  ? "text-(--main)"
+                  : "text-(--text-main)"
+            }`}
+            data-testid="workspace-feedback"
+          >
+            {isUploadingPdf
+              ? "Uploading PDF..."
+              : uploadFeedback?.message ?? ""}
+          </p>
+        </div>
+      ) : null}
       <input
         ref={pdfUploadInputRef}
         accept='application/pdf,.pdf'
@@ -1682,8 +2123,6 @@ export function WorkspaceShell({
           selectedNodeId={selectedNodeId}
           classLabel={workspace.classLabel}
           sessions={workspace.sessions}
-          uploadFeedback={uploadFeedback}
-          isUploadingPdf={isUploadingPdf}
           onSelectNode={handleSelectNode}
           onCreateFolder={handleCreateFolder}
           onAddAction={handleAddAction}
@@ -1695,12 +2134,13 @@ export function WorkspaceShell({
         <EditorPane
           lockIn={lockIn}
           onToggleLockIn={() => setLockIn((current) => !current)}
-          noteId={activeEditorNote?.id ?? null}
+          isNoteLoading={isLoadingSelectedNote}
+          noteId={selectedNodeKind === "note" ? selectedNodeId : null}
           note={
-            activeEditorNote
+            activeEditorNote && activeEditorNote.contentJson !== undefined
               ? {
                   title: activeEditorNote.title,
-                  body: activeEditorNote.body || "<p></p>",
+                  contentJson: activeEditorNote.contentJson,
                   createdAt: activeEditorNote.createdAt,
                   updatedAt: activeEditorNote.updatedAt,
                 }
@@ -1710,6 +2150,7 @@ export function WorkspaceShell({
           isDirty={isDirty}
           onTitleChange={handleTitleChange}
           onBodyChange={handleBodyChange}
+          onUploadImage={handleUploadImage}
           onSave={handleSaveNote}
           onDelete={handleDeleteCurrentNote}
           saveLabel='Save note'

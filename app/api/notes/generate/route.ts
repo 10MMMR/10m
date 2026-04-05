@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import {
-  normalizeGeneratedHtml,
+  normalizeGeneratedNoteDocument,
   type NoteGenerationMode,
 } from "@/lib/ai/assistant-contract";
 import { getAiProvider } from "@/lib/ai";
 import { NOTE_GENERATION_SYSTEM_PROMPT } from "@/lib/ai/prompts";
+import {
+  AI_NOTE_DOCUMENT_JSON_SCHEMA,
+  parseNoteDocument,
+} from "@/lib/note-document";
 import {
   buildSourceContextParts,
   getAuthenticatedAiRequest,
@@ -34,19 +38,21 @@ function getDraftContext(value: unknown): DraftNoteContext | null {
   const title = typeof Reflect.get(value, "title") === "string"
     ? Reflect.get(value, "title").trim()
     : "";
-  const body = typeof Reflect.get(value, "body") === "string"
-    ? Reflect.get(value, "body").trim()
-    : "";
+  const contentJson = Reflect.get(value, "contentJson");
 
-  if (!nodeId || !title || !body) {
+  if (!nodeId || !title) {
     return null;
   }
 
-  return {
-    nodeId,
-    title,
-    body,
-  };
+  try {
+    return {
+      nodeId,
+      title,
+      contentJson: parseNoteDocument(contentJson),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function getMode(value: unknown): NoteGenerationMode | null {
@@ -142,32 +148,34 @@ export async function POST(request: Request) {
       supabase: authResult.supabase,
     });
 
-    const html = normalizeGeneratedHtml(
-      await provider.generateText({
-        messages: [
-          {
-            role: "user",
-            parts: [
-              {
-                text: [
-                  `Generation mode: ${mode}.`,
-                  title ? `Suggested title: ${title}.` : "Suggested title: none.",
-                  `User instruction: ${prompt}`,
-                  "Follow the user instruction exactly for scope, length, and structure.",
-                  "Only invent a larger study-note structure if the user did not specify one.",
-                  "Use the source material to produce final HTML for the note body only.",
-                ].join("\n"),
-              },
-              ...parts,
-            ],
-          },
-        ],
-        systemInstruction: NOTE_GENERATION_SYSTEM_PROMPT,
-      }),
-    );
+    const generatedText = await provider.generateText({
+      messages: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: [
+                `Generation mode: ${mode}.`,
+                title ? `Suggested title: ${title}.` : "Suggested title: none.",
+                `User instruction: ${prompt}`,
+                "Follow the user instruction exactly for scope, length, and structure.",
+                "Only invent a larger study-note structure if the user did not specify one.",
+                "Use the source material to produce final JSON for the note body only.",
+              ].join("\n"),
+            },
+            ...parts,
+          ],
+        },
+      ],
+      responseJsonSchema: AI_NOTE_DOCUMENT_JSON_SCHEMA,
+      responseMimeType: "application/json",
+      systemInstruction: NOTE_GENERATION_SYSTEM_PROMPT,
+    });
+
+    const contentJson = normalizeGeneratedNoteDocument(generatedText);
 
     return NextResponse.json({
-      html,
+      contentJson,
       ...(title ? { title } : {}),
     });
   } catch (error) {

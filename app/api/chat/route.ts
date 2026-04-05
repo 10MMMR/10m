@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAiProvider } from "@/lib/ai";
+import { parseNoteDocument } from "@/lib/note-document";
 import {
   ASSISTANT_COMMAND_RESPONSE_JSON_SCHEMA,
   parseAssistantCommand,
@@ -64,19 +65,21 @@ function getDraftContext(value: unknown): DraftNoteContext | null {
   const title = typeof Reflect.get(value, "title") === "string"
     ? Reflect.get(value, "title").trim()
     : "";
-  const body = typeof Reflect.get(value, "body") === "string"
-    ? Reflect.get(value, "body").trim()
-    : "";
+  const contentJson = Reflect.get(value, "contentJson");
 
-  if (!nodeId || !title || !body) {
+  if (!nodeId || !title) {
     return null;
   }
 
-  return {
-    nodeId,
-    title,
-    body,
-  };
+  try {
+    return {
+      nodeId,
+      title,
+      contentJson: parseNoteDocument(contentJson),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(request: Request) {

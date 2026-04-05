@@ -44,7 +44,7 @@ There are two server routes for AI:
   - Classifies the user turn and returns a structured assistant command.
   - Used for normal chat and for deciding when chat should trigger note generation.
 - `POST /api/notes/generate`
-  - Generates final HTML for a note body.
+  - Generates validated TipTap JSON for a note body.
   - Used by tree-based note generation and chat-triggered note generation.
 
 The shared AI layer lives in `lib/ai/` and is responsible for:
@@ -53,7 +53,7 @@ The shared AI layer lives in `lib/ai/` and is responsible for:
 - config loading
 - prompt definitions
 - assistant command parsing
-- HTML normalization
+- note document validation
 - authenticated source-context loading from Supabase
 
 ## AI Action Registry
@@ -120,7 +120,7 @@ Triggered by `Generate notes` from the left tree menu.
 - Filters sources to notes and PDFs only.
 - Creates a new note at the class root.
 - Calls `POST /api/notes/generate`.
-- Writes returned HTML into the note body.
+- Writes returned TipTap JSON into the note body.
 - Persists the note.
 
 ### Chat-Triggered Generation
@@ -130,13 +130,13 @@ Triggered when chat returns `action: "generate_note"`.
 - Uses the active note or PDF as the default source context.
 - If `target === "current_note"` and the active item is a note, the current note is overwritten.
 - Otherwise a new root note is created.
-- The new or overwritten note is populated with generated HTML and saved.
+- The new or overwritten note is populated with generated TipTap JSON and saved.
 
 Temporary behavior during generation:
 
 - The target note is opened first.
-- A placeholder HTML body is shown while generation is running.
-- If generation fails, the note stays open and receives a short failure message body instead of silently reverting.
+- A placeholder TipTap document is shown while generation is running.
+- If generation fails, the note stays open and receives a short failure document instead of silently reverting.
 
 ## AI Contracts
 
@@ -155,7 +155,10 @@ Request body:
   "draftContext": {
     "nodeId": "note-node-id",
     "title": "Current draft title",
-    "body": "<p>Current unsaved HTML</p>"
+    "contentJson": {
+      "type": "doc",
+      "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Current unsaved note" }] }]
+    }
   }
 }
 ```
@@ -166,7 +169,7 @@ Notes:
 - Each message must be `{ "role": "user" | "assistant", "content": string }`.
 - Empty or whitespace-only message content is rejected.
 - `draftContext` is optional.
-- `draftContext` must include non-empty `nodeId`, `title`, and `body` when provided.
+- `draftContext` must include non-empty `nodeId`, `title`, and valid `contentJson` when provided.
 - `draftContext` only matters when the active source is the same note currently being edited.
 
 Response body:
@@ -224,7 +227,10 @@ Request body:
   "draftContext": {
     "nodeId": "note-id",
     "title": "Unsaved title",
-    "body": "<p>Unsaved body</p>"
+    "contentJson": {
+      "type": "doc",
+      "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Unsaved body" }] }]
+    }
   }
 }
 ```
@@ -245,7 +251,10 @@ Response body:
 
 ```json
 {
-  "html": "<h1>...</h1><p>...</p>",
+  "contentJson": {
+    "type": "doc",
+    "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "..." }] }]
+  },
   "title": "Optional title"
 }
 ```
@@ -264,10 +273,10 @@ Rules:
   - `file`
 - Notes are sent as text parts containing:
   - note title
-  - note HTML body
+  - plain text derived from the stored TipTap document
 - PDFs are downloaded from Supabase Storage and sent to Gemini as `inlineData` parts with base64 content.
 - There is currently no documented request-size cap beyond the PDF upload limit, so context size scales with selected sources and message history.
-- If the active note has unsaved local edits, `draftContext` replaces the stored note title/body for that note during context construction.
+- If the active note has unsaved local edits, `draftContext` replaces the stored note title/content for that note during context construction.
 
 This means the model can reason over:
 

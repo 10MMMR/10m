@@ -1,3 +1,8 @@
+import {
+  EMPTY_NOTE_DOCUMENT,
+  type NoteDocument,
+} from "@/lib/note-document";
+
 export type TreeNodeKind = "root" | "folder" | "note" | "file";
 
 export type TreeNode = {
@@ -13,7 +18,7 @@ export type TreeNode = {
   fileStoragePath?: string;
   fileMimeType?: string;
   fileSize?: number;
-  body?: string;
+  contentJson?: NoteDocument;
 };
 
 export type DropPosition = "before" | "inside" | "after";
@@ -333,7 +338,7 @@ export function createTreeNoteNode(
     kind: "note",
     noteId,
     title,
-    body: "<p></p>",
+    contentJson: EMPTY_NOTE_DOCUMENT,
     order: 0,
     createdAt: timestamp,
     updatedAt: timestamp,

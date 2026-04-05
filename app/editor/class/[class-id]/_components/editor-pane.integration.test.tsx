@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { EditorPane } from "./editor-pane";
+import type { NoteDocument } from "@/lib/note-document";
 
 jest.mock("@tiptap/extension-table", () => ({
   __esModule: true,
@@ -60,7 +61,7 @@ type MockEditor = {
   };
   chain: () => MockChain;
   commands: {
-    setContent: (content: string, options?: { emitUpdate?: boolean }) => void;
+    setContent: (content: NoteDocument, options?: { emitUpdate?: boolean }) => void;
     updateAttributes: (
       type: string,
       attributes: Record<string, string | null | boolean>,
@@ -68,6 +69,7 @@ type MockEditor = {
   };
   getAttributes: (name?: string) => Record<string, string | null | boolean>;
   getHTML: () => string;
+  getJSON: () => NoteDocument;
   isActive: (name: string) => boolean;
   off: (event: string, callback: () => void) => void;
   on: (event: string, callback: () => void) => void;
@@ -77,7 +79,141 @@ type MockEditor = {
 jest.mock("@tiptap/react", () => {
   const React = jest.requireActual<typeof import("react")>("react");
 
-  function createEditor(onUpdate: UpdateHandler, initialContent = "<p>Initial body</p>"): MockEditor {
+  function htmlToDocument(html: string): NoteDocument {
+    if (html.startsWith("<table")) {
+      const rows = Array.from(html.matchAll(/<tr>(.*?)<\/tr>/g)).map((match) => match[1] ?? "");
+
+      return {
+        type: "doc",
+        content: [{
+          type: "table",
+          content: rows.map((row, rowIndex) => {
+            const headerMatches = Array.from(row.matchAll(/<th>(.*?)<\/th>/g)).map((match) => match[1] ?? "");
+            const cellMatches = Array.from(row.matchAll(/<td>(.*?)<\/td>/g)).map((match) => match[1] ?? "");
+            const cells = (headerMatches.length > 0 ? headerMatches : cellMatches).map((text) => ({
+              type: headerMatches.length > 0 ? "tableHeader" : "tableCell",
+              content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+            }));
+
+            return {
+              type: "tableRow",
+              content: cells.length > 0 ? cells : [{
+                type: rowIndex === 0 ? "tableHeader" : "tableCell",
+                content: [{ type: "paragraph" }],
+              }],
+            };
+          }),
+        }],
+      };
+    }
+
+    if (html.startsWith("<ol")) {
+      const type = html.includes('type="a"') ? "a" : undefined;
+      return {
+        type: "doc",
+        content: [{
+          type: "orderedList",
+          ...(type ? { attrs: { type } } : {}),
+          content: [{
+            type: "listItem",
+            content: [{ type: "paragraph", content: [{ type: "text", text: "First item" }] }],
+          }],
+        }],
+      };
+    }
+
+    if (html.startsWith("<ul")) {
+      const text = (html.match(/<p>(.*?)<\/p>/)?.[1] ?? "Alpha").replaceAll(/<[^>]+>/g, "");
+      return {
+        type: "doc",
+        content: [{
+          type: "bulletList",
+          content: [{
+            type: "listItem",
+            content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+          }],
+        }],
+      };
+    }
+
+    const heading = html.match(/^<h([1-3])>(.*?)<\/h\1><p>(.*?)<\/p>$/);
+    if (heading) {
+      return {
+        type: "doc",
+        content: [
+          { type: "heading", attrs: { level: Number(heading[1]) }, content: [{ type: "text", text: heading[2] }] },
+          { type: "paragraph", content: [{ type: "text", text: heading[3] }] },
+        ],
+      };
+    }
+
+    const bold = html.match(/^<p><strong>(.*?)<\/strong><\/p>$/);
+    if (bold) {
+      return {
+        type: "doc",
+        content: [{
+          type: "paragraph",
+          content: [{ type: "text", text: bold[1], marks: [{ type: "bold" }] }],
+        }],
+      };
+    }
+
+    const plain = html.match(/^<p>(.*?)<\/p>$/);
+    return {
+      type: "doc",
+      content: [{
+        type: "paragraph",
+        ...(plain?.[1] ? { content: [{ type: "text", text: plain[1] }] } : {}),
+      }],
+    };
+  }
+
+  function documentToHtml(content: NoteDocument): string {
+    const firstNode = content.content?.[0];
+
+    if (!firstNode) {
+      return "<p></p>";
+    }
+
+    if (firstNode.type === "table") {
+      const rows = firstNode.content ?? [];
+      return `<table><tbody>${rows.map((row) => `<tr>${(row.content ?? []).map((cell) => {
+        const text = cell.content?.[0]?.content?.[0]?.text ?? "";
+        return cell.type === "tableHeader" ? `<th>${text}</th>` : `<td>${text}</td>`;
+      }).join("")}</tr>`).join("")}</tbody></table>`;
+    }
+
+    if (firstNode.type === "orderedList") {
+      const type = firstNode.attrs?.type === "a" ? ' type="a"' : "";
+      return `<ol${type}><li><p>First item</p></li></ol>`;
+    }
+
+    if (firstNode.type === "bulletList") {
+      const text = firstNode.content?.[0]?.content?.[0]?.content?.[0]?.text ?? "Alpha";
+      return `<ul><li><p>${text}</p></li></ul>`;
+    }
+
+    if (
+      firstNode.type === "heading" &&
+      content.content?.[1]?.type === "paragraph"
+    ) {
+      const title = firstNode.content?.[0]?.text ?? "";
+      const body = content.content[1]?.content?.[0]?.text ?? "";
+      return `<h${firstNode.attrs?.level ?? 1}>${title}</h${firstNode.attrs?.level ?? 1}><p>${body}</p>`;
+    }
+
+    const textNode = firstNode.content?.[0];
+    if (textNode?.marks?.some((mark) => mark.type === "bold")) {
+      return `<p><strong>${textNode.text ?? ""}</strong></p>`;
+    }
+
+    return `<p>${textNode?.text ?? ""}</p>`;
+  }
+
+  function createEditor(
+    onUpdate: UpdateHandler,
+    initialContent: NoteDocument = htmlToDocument("<p>Initial body</p>"),
+  ): MockEditor {
     const listeners = new Map<string, Set<() => void>>();
 
     const buildTableHtml = (rows: number, cols: number, withHeaderRow: boolean) => {
@@ -98,7 +234,7 @@ jest.mock("@tiptap/react", () => {
       bold: false,
       bulletList: false,
       highlight: false,
-      html: initialContent,
+      html: documentToHtml(initialContent),
       italic: false,
       lineHeight: "1.5",
       table: false,
@@ -111,6 +247,7 @@ jest.mock("@tiptap/react", () => {
       underline: false,
       updateHandler: onUpdate,
       fontSize: "17px",
+      json: initialContent,
     };
 
     const emit = (event: string) => {
@@ -129,28 +266,32 @@ jest.mock("@tiptap/react", () => {
         state.tableRows = 0;
         state.tableCols = 0;
         state.html = "<p>Table removed</p>";
+        state.json = htmlToDocument(state.html);
         return;
       }
 
       state.html = buildTableHtml(state.tableRows, state.tableCols, state.tableHeader);
+      state.json = htmlToDocument(state.html);
     };
 
-    const setTableContent = (content: string) => {
-      state.html = content;
-      state.bulletList = content.includes("<ul") || content.includes("<ol");
-      state.orderedList = content.includes("<ol");
-      state.orderedListType = content.includes('<ol type="a">') ? "a" : null;
-      state.table = content.includes("<table");
-      state.tableHeader = content.includes("<th");
-      state.tableRows = state.table ? Math.max((content.match(/<tr>/g) || []).length, 1) : 0;
-      const headerCells = (content.match(/<th>/g) || []).length;
-      const dataCells = (content.match(/<td>/g) || []).length;
+    const setTableContent = (content: NoteDocument) => {
+      state.json = content;
+      state.html = documentToHtml(content);
+      state.bulletList = state.html.includes("<ul") || state.html.includes("<ol");
+      state.orderedList = state.html.includes("<ol");
+      state.orderedListType = state.html.includes('<ol type="a">') ? "a" : null;
+      state.table = state.html.includes("<table");
+      state.tableHeader = state.html.includes("<th");
+      state.tableRows = state.table ? Math.max((state.html.match(/<tr>/g) || []).length, 1) : 0;
+      const headerCells = (state.html.match(/<th>/g) || []).length;
+      const dataCells = (state.html.match(/<td>/g) || []).length;
       state.tableCols = state.table ? Math.max(headerCells, dataCells > 0 && state.tableRows > 0 ? dataCells / Math.max(state.tableRows - (state.tableHeader ? 1 : 0), 1) : 0, 1) : 0;
     };
 
     const syncOrderedListHtml = () => {
       if (!state.orderedList) {
         state.html = "<p>Ordered list removed</p>";
+        state.json = htmlToDocument(state.html);
         state.orderedListType = null;
         return;
       }
@@ -158,6 +299,7 @@ jest.mock("@tiptap/react", () => {
       const typeAttribute =
         state.orderedListType === "a" ? ' type="a"' : "";
       state.html = `<ol${typeAttribute}><li><p>First item</p></li></ol>`;
+      state.json = htmlToDocument(state.html);
     };
 
     const updateNodeAttributes = (
@@ -200,6 +342,7 @@ jest.mock("@tiptap/react", () => {
           apply(true, () => {
             state.bold = !state.bold;
             state.html = state.bold ? "<p><strong>Bold body</strong></p>" : "<p>Bold body</p>";
+            state.json = htmlToDocument(state.html);
           }),
         toggleItalic: () =>
           apply(true, () => {
@@ -314,6 +457,7 @@ jest.mock("@tiptap/react", () => {
           state.html = `<p>${text}</p>`;
         }
 
+        state.json = htmlToDocument(state.html);
         state.bulletList = state.html.includes("<ul") || state.html.includes("<ol");
         emit("transaction");
         state.updateHandler?.({ editor });
@@ -327,6 +471,7 @@ jest.mock("@tiptap/react", () => {
           state.html = `<p>${text}</p>`;
         }
 
+        state.json = htmlToDocument(state.html);
         state.table = state.html.includes("<table");
         emit("transaction");
         state.updateHandler?.({ editor });
@@ -348,23 +493,24 @@ jest.mock("@tiptap/react", () => {
       },
       getAttributes: (name) => {
         if (name === "textStyle") {
-          return { fontSize: state.fontSize };
+          return { fontSize: state.fontSize } as Record<string, string | boolean | null>;
         }
 
         if (name === "orderedList") {
-          return { type: state.orderedListType };
+          return { type: state.orderedListType } as Record<string, string | boolean | null>;
         }
 
         if (name === "paragraph" || name === "heading") {
           return {
             lineHeight: state.lineHeight,
             textAlign: state.textAlign,
-          };
+          } as Record<string, string | boolean | null>;
         }
 
-        return { fontSize: state.fontSize };
+        return { fontSize: state.fontSize } as Record<string, string | boolean | null>;
       },
       getHTML: () => state.html,
+      getJSON: () => state.json,
       isActive: (name: string) => {
         if (name === "bold") return state.bold;
         if (name === "italic") return state.italic;
@@ -413,7 +559,7 @@ jest.mock("@tiptap/react", () => {
         </button>
       </div>
     ),
-    useEditor: (options?: { content?: string; onUpdate?: UpdateHandler }) => {
+    useEditor: (options?: { content?: NoteDocument; onUpdate?: UpdateHandler }) => {
       const editorRef = React.useRef(null) as { current: MockEditor | null };
 
       if (!editorRef.current) {
@@ -425,6 +571,13 @@ jest.mock("@tiptap/react", () => {
   };
 });
 
+function createParagraphDocument(text: string): NoteDocument {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
 const defaultProps = {
   emptyStateDescription: "Create a note from the left pane to start writing.",
   emptyStateTitle: "No note selected",
@@ -432,8 +585,8 @@ const defaultProps = {
   lockIn: false,
   noteId: "note-1",
   note: {
+    contentJson: createParagraphDocument("My note body"),
     title: "My note",
-    body: "<p>My note body</p>",
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
   },
@@ -553,7 +706,13 @@ describe("EditorPane", () => {
 
     jest.advanceTimersByTime(100);
 
-    expect(onBodyChange).toHaveBeenCalledWith("<p><strong>Bold body</strong></p>");
+    expect(onBodyChange).toHaveBeenCalledWith({
+      type: "doc",
+      content: [{
+        type: "paragraph",
+        content: [{ type: "text", text: "Bold body", marks: [{ type: "bold" }] }],
+      }],
+    });
   });
 
   test("calls save and delete handlers from action buttons", () => {
@@ -633,9 +792,38 @@ describe("EditorPane", () => {
 
     jest.advanceTimersByTime(100);
 
-    expect(onBodyChange).toHaveBeenCalledWith(
-      "<table><tbody><tr><th>Header 1</th><th>Header 2</th><th>Header 3</th></tr><tr><td>Cell 1-1</td><td>Cell 1-2</td><td>Cell 1-3</td></tr><tr><td>Cell 2-1</td><td>Cell 2-2</td><td>Cell 2-3</td></tr></tbody></table>",
-    );
+    expect(onBodyChange).toHaveBeenCalledWith({
+      type: "doc",
+      content: [{
+        type: "table",
+        content: [
+          {
+            type: "tableRow",
+            content: [
+              { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "Header 1" }] }] },
+              { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "Header 2" }] }] },
+              { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "Header 3" }] }] },
+            ],
+          },
+          {
+            type: "tableRow",
+            content: [
+              { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "Cell 1-1" }] }] },
+              { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "Cell 1-2" }] }] },
+              { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "Cell 1-3" }] }] },
+            ],
+          },
+          {
+            type: "tableRow",
+            content: [
+              { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "Cell 2-1" }] }] },
+              { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "Cell 2-2" }] }] },
+              { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "Cell 2-3" }] }] },
+            ],
+          },
+        ],
+      }],
+    });
   });
 
   test("enables table actions only when the selection is inside a table", () => {
@@ -661,7 +849,22 @@ describe("EditorPane", () => {
         {...defaultProps}
         note={{
           ...defaultProps.note,
-          body: "<table><tbody><tr><th>Header 1</th></tr><tr><td>Cell 1-1</td></tr></tbody></table>",
+          contentJson: {
+            type: "doc",
+            content: [{
+              type: "table",
+              content: [
+                {
+                  type: "tableRow",
+                  content: [{ type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "Header 1" }] }] }],
+                },
+                {
+                  type: "tableRow",
+                  content: [{ type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "Cell 1-1" }] }] }],
+                },
+              ],
+            }],
+          },
         }}
         onBodyChange={onBodyChange}
       />,
@@ -671,7 +874,7 @@ describe("EditorPane", () => {
     fireEvent.mouseDown(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" }));
     jest.advanceTimersByTime(100);
 
-    expect(onBodyChange).toHaveBeenCalledWith("<p>Table removed</p>");
+    expect(onBodyChange).toHaveBeenCalledWith(createParagraphDocument("Table removed"));
   });
 
   test("opens the desktop table dropdown and runs table actions", () => {
@@ -692,9 +895,9 @@ describe("EditorPane", () => {
     fireEvent.mouseDown(within(getDesktopTableMenu()).getByRole("button", { name: "Insert table" }));
     jest.advanceTimersByTime(100);
 
-    expect(onBodyChange).toHaveBeenLastCalledWith(
-      "<table><tbody><tr><th>Header 1</th><th>Header 2</th><th>Header 3</th></tr><tr><td>Cell 1-1</td><td>Cell 1-2</td><td>Cell 1-3</td></tr><tr><td>Cell 2-1</td><td>Cell 2-2</td><td>Cell 2-3</td></tr></tbody></table>",
-    );
+    expect(onBodyChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "doc",
+    }));
     expect(within(getDesktopTableMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
   });
 
@@ -727,9 +930,9 @@ describe("EditorPane", () => {
     fireEvent.mouseDown(within(getOverflowMenu()).getByRole("button", { name: "Insert table" }));
     jest.advanceTimersByTime(100);
 
-    expect(onBodyChange).toHaveBeenLastCalledWith(
-      "<table><tbody><tr><th>Header 1</th><th>Header 2</th><th>Header 3</th></tr><tr><td>Cell 1-1</td><td>Cell 1-2</td><td>Cell 1-3</td></tr><tr><td>Cell 2-1</td><td>Cell 2-2</td><td>Cell 2-3</td></tr></tbody></table>",
-    );
+    expect(onBodyChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "doc",
+    }));
     expect(screen.queryByRole("button", { name: "More tools" })).toBeInTheDocument();
     expect(within(getOverflowMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
   });
@@ -781,7 +984,7 @@ describe("EditorPane", () => {
         {...defaultProps}
         note={{
           ...defaultProps.note,
-          body: "<p>My note body</p>",
+          contentJson: createParagraphDocument("My note body"),
         }}
       />,
     );
@@ -794,7 +997,16 @@ describe("EditorPane", () => {
     const onBodyChange = jest.fn();
     const listNote = {
       ...defaultProps.note,
-      body: "<ul><li><p>Alpha</p></li></ul>",
+      contentJson: {
+        type: "doc",
+        content: [{
+          type: "bulletList",
+          content: [{
+            type: "listItem",
+            content: [{ type: "paragraph", content: [{ type: "text", text: "Alpha" }] }],
+          }],
+        }],
+      },
     };
     const { rerender } = render(
       <EditorPane
@@ -824,7 +1036,16 @@ describe("EditorPane", () => {
     expect(screen.getByTestId("editor-html")).toHaveTextContent(
       "<ul><li><p>Alphaxx</p></li></ul>",
     );
-    expect(onBodyChange).toHaveBeenLastCalledWith("<ul><li><p>Alphaxx</p></li></ul>");
+    expect(onBodyChange).toHaveBeenLastCalledWith({
+      type: "doc",
+      content: [{
+        type: "bulletList",
+        content: [{
+          type: "listItem",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "Alphaxx" }] }],
+        }],
+      }],
+    });
   });
 
   test("keeps typing inside the same table cell across same-note rerenders", () => {
@@ -832,7 +1053,16 @@ describe("EditorPane", () => {
     const onBodyChange = jest.fn();
     const tableNote = {
       ...defaultProps.note,
-      body: "<table><tbody><tr><td>Cell</td></tr></tbody></table>",
+      contentJson: {
+        type: "doc",
+        content: [{
+          type: "table",
+          content: [{
+            type: "tableRow",
+            content: [{ type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "Cell" }] }] }],
+          }],
+        }],
+      },
     };
     const { rerender } = render(
       <EditorPane
@@ -862,9 +1092,16 @@ describe("EditorPane", () => {
     expect(screen.getByTestId("editor-html")).toHaveTextContent(
       "<table><tbody><tr><td>Cellxx</td></tr></tbody></table>",
     );
-    expect(onBodyChange).toHaveBeenLastCalledWith(
-      "<table><tbody><tr><td>Cellxx</td></tr></tbody></table>",
-    );
+    expect(onBodyChange).toHaveBeenLastCalledWith({
+      type: "doc",
+      content: [{
+        type: "table",
+        content: [{
+          type: "tableRow",
+          content: [{ type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "Cellxx" }] }] }],
+        }],
+      }],
+    });
   });
 
   test("loads a newly selected note body and clears the editor when selection resets", () => {
@@ -878,7 +1115,7 @@ describe("EditorPane", () => {
         noteId="note-2"
         note={{
           ...defaultProps.note,
-          body: "<p>Second note body</p>",
+          contentJson: createParagraphDocument("Second note body"),
           title: "Second note",
         }}
       />,
@@ -903,7 +1140,16 @@ describe("EditorPane", () => {
     const onBodyChange = jest.fn();
     const listNote = {
       ...defaultProps.note,
-      body: "<ul><li><p>Alpha</p></li></ul>",
+      contentJson: {
+        type: "doc",
+        content: [{
+          type: "bulletList",
+          content: [{
+            type: "listItem",
+            content: [{ type: "paragraph", content: [{ type: "text", text: "Alpha" }] }],
+          }],
+        }],
+      },
     };
     const { rerender } = render(
       <EditorPane
@@ -922,7 +1168,7 @@ describe("EditorPane", () => {
         note={{
           ...defaultProps.note,
           title: "Second note",
-          body: "<p>Second note body</p>",
+          contentJson: createParagraphDocument("Second note body"),
           updatedAt: "2025-01-01T00:00:02.000Z",
         }}
         onBodyChange={onBodyChange}

@@ -2,6 +2,10 @@ import {
   AI_ACTION_REGISTRY,
   SUPPORTED_ASSISTANT_ACTIONS,
 } from "./actions";
+import {
+  parseAiNoteDocument,
+  type NoteDocument,
+} from "@/lib/note-document";
 
 export type AssistantAction = "reply" | "generate_note";
 export type NoteGenerationTarget = "current_note" | "new_note";
@@ -112,21 +116,14 @@ export function parseAssistantCommand(raw: string): AssistantCommand {
   };
 }
 
-export function normalizeGeneratedHtml(raw: string) {
-  const fencedMatch = raw.trim().match(/^```(?:html)?\s*([\s\S]*?)\s*```$/i);
-  const trimmed = (fencedMatch ? fencedMatch[1] : raw).trim();
+export function normalizeGeneratedNoteDocument(raw: string): NoteDocument {
+  let parsed: unknown;
 
-  if (!trimmed) {
-    throw new Error("AI returned empty note content.");
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("AI returned invalid JSON for note content.");
   }
 
-  if (!/<[a-z][\s\S]*>/i.test(trimmed)) {
-    throw new Error("AI returned note content without HTML.");
-  }
-
-  if (/^\s{0,3}(?:[-*+] |\d+\. |#{1,6}\s)/m.test(trimmed) && !trimmed.includes("<")) {
-    throw new Error("AI returned markdown instead of HTML.");
-  }
-
-  return trimmed;
+  return parseAiNoteDocument(parsed);
 }

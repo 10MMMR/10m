@@ -1,11 +1,17 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeClassId } from "@/app/editor/class/[class-id]/_lib/workspace-data";
+import {
+  EMPTY_NOTE_DOCUMENT,
+  noteDocumentToPlainText,
+  parseNoteDocument,
+  type NoteDocument,
+} from "@/lib/note-document";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import type { AiMessage, AiPart } from "@/lib/ai/types";
 import type { TreeNode } from "@/lib/tree-repository";
 import {
   createSupabaseServerClient,
-  getSupabaseStorageBucket,
+  getSupabasePdfStorageBucket,
 } from "@/lib/supabase-server";
 
 const NODE_ID_PATTERN = /^[a-z0-9:_-]+$/i;
@@ -13,7 +19,7 @@ const NODE_ID_PATTERN = /^[a-z0-9:_-]+$/i;
 export type DraftNoteContext = {
   nodeId: string;
   title: string;
-  body: string;
+  contentJson: NoteDocument;
 };
 
 export function getBearerToken(request: Request) {
@@ -100,7 +106,7 @@ async function loadClassTree(
   classId: string,
 ) {
   const repository = new SupabaseTreeRepository(supabase);
-  return repository.listTreeByClass(classId);
+  return repository.listTreeByClass(classId, { includeNoteContent: false });
 }
 
 function getEffectiveNoteNode(node: TreeNode, draftContext?: DraftNoteContext | null) {
@@ -111,7 +117,7 @@ function getEffectiveNoteNode(node: TreeNode, draftContext?: DraftNoteContext | 
   return {
     ...node,
     title: draftContext.title,
-    body: draftContext.body,
+    contentJson: draftContext.contentJson,
   } satisfies TreeNode;
 }
 
@@ -119,7 +125,7 @@ async function downloadPdfAsBase64(
   supabase: SupabaseClient,
   storagePath: string,
 ) {
-  const bucket = getSupabaseStorageBucket();
+  const bucket = getSupabasePdfStorageBucket();
 
   if (!bucket) {
     throw new Error("Supabase storage is not configured.");
@@ -146,6 +152,11 @@ export async function buildSourceContextParts({
   supabase: SupabaseClient;
 }) {
   const tree = await loadClassTree(supabase, classId);
+  const repository = new SupabaseTreeRepository(supabase);
+  const noteIds = tree
+    .filter((node) => node.kind === "note" && nodeIds.includes(node.id))
+    .flatMap((node) => (node.noteId ? [node.noteId] : []));
+  const noteMap = await repository.loadNotesByIds(classId, noteIds);
   const sourceNodes = nodeIds.map((nodeId) => {
     const node = tree.find((item) => item.id === nodeId);
 
@@ -153,7 +164,19 @@ export async function buildSourceContextParts({
       throw new Error("One or more source nodes are invalid.");
     }
 
-    return getEffectiveNoteNode(node, draftContext);
+    if (node.kind !== "note") {
+      return node;
+    }
+
+    const loadedNote = node.noteId ? noteMap.get(node.noteId) : null;
+
+    return getEffectiveNoteNode({
+      ...node,
+      contentJson: loadedNote?.content_json,
+      createdAt: loadedNote?.created_at ?? node.createdAt,
+      title: loadedNote?.title ?? node.title,
+      updatedAt: loadedNote?.updated_at ?? node.updatedAt,
+    }, draftContext);
   });
 
   const parts: AiPart[] = [
@@ -172,8 +195,8 @@ export async function buildSourceContextParts({
       parts.push({
         text: [
           `Source ${index + 1} note title: ${node.title}`,
-          "Note HTML:",
-          node.body ?? "<p></p>",
+          "Note text:",
+          noteDocumentToPlainText(parseNoteDocument(node.contentJson ?? EMPTY_NOTE_DOCUMENT)),
         ].join("\n"),
       });
       continue;

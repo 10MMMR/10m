@@ -4,12 +4,12 @@ import { DELETE, POST } from "./route";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import {
   createSupabaseServerClient,
-  getSupabaseStorageBucket,
+  getSupabasePdfStorageBucket,
 } from "@/lib/supabase-server";
 
 jest.mock("@/lib/supabase-server", () => ({
   createSupabaseServerClient: jest.fn(),
-  getSupabaseStorageBucket: jest.fn(),
+  getSupabasePdfStorageBucket: jest.fn(),
 }));
 
 jest.mock("@/lib/supabase-tree-repository", () => ({
@@ -17,7 +17,7 @@ jest.mock("@/lib/supabase-tree-repository", () => ({
 }));
 
 const mockedCreateSupabaseServerClient = jest.mocked(createSupabaseServerClient);
-const mockedGetSupabaseStorageBucket = jest.mocked(getSupabaseStorageBucket);
+const mockedGetSupabasePdfStorageBucket = jest.mocked(getSupabasePdfStorageBucket);
 const MockedSupabaseTreeRepository = jest.mocked(SupabaseTreeRepository);
 
 function createRequest(
@@ -66,7 +66,7 @@ function createSupabaseMock() {
 describe("/api/uploads/pdf", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockedGetSupabaseStorageBucket.mockReturnValue("uploaded-pdfs");
+    mockedGetSupabasePdfStorageBucket.mockReturnValue("uploaded-pdfs");
     (globalThis.crypto.randomUUID as jest.Mock).mockReturnValue("file-123");
   });
 

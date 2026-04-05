@@ -410,6 +410,9 @@ Response format:
 4. End with a brief overall assessment.
 5. If no meaningful issues are found, say so explicitly and mention any residual risks or testing gaps.
 
+# Dependency installation
+
+Use pnpm instead of npm
 
 # Future Expansion
 

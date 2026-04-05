@@ -1,5 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  EMPTY_NOTE_DOCUMENT,
+  parseNoteDocument,
+  type NoteDocument,
+} from "@/lib/note-document";
+import {
   ensureTreeRoot,
   sortTreeNodes,
   type TreeNode,
@@ -21,11 +26,31 @@ type TreeNodeRow = {
 };
 
 type EditorNoteRow = {
-  body: string;
+  content_json?: NoteDocument;
+  content_version: number;
   created_at: string;
   id: string;
   title: string;
   updated_at: string;
+};
+
+type InvalidNoteDocumentDetails = {
+  classId: string;
+  error: string;
+  noteId: string;
+};
+
+type ListTreeByClassOptions = {
+  includeNoteContent?: boolean;
+  onInvalidNoteDocument?: (
+    details: InvalidNoteDocumentDetails,
+  ) => void | Promise<void>;
+};
+
+type LoadNotesByIdsOptions = {
+  onInvalidNoteDocument?: (
+    details: InvalidNoteDocumentDetails,
+  ) => void | Promise<void>;
 };
 
 function toTreeNode(
@@ -47,7 +72,7 @@ function toTreeNode(
     fileStoragePath: row.file_storage_path ?? undefined,
     fileMimeType: row.file_mime_type ?? undefined,
     fileSize: row.file_size ?? undefined,
-    body: note?.body,
+    contentJson: note?.content_json,
   };
 }
 
@@ -70,7 +95,8 @@ function toTreeNodeRow(node: TreeNode) {
 
 function toEditorNoteRow(node: TreeNode): EditorNoteRow {
   return {
-    body: node.body ?? "<p></p>",
+    content_json: parseNoteDocument(node.contentJson ?? EMPTY_NOTE_DOCUMENT),
+    content_version: 1,
     created_at: node.createdAt,
     id: node.noteId ?? node.id,
     title: node.title,
@@ -81,7 +107,61 @@ function toEditorNoteRow(node: TreeNode): EditorNoteRow {
 export class SupabaseTreeRepository {
   constructor(private readonly client: SupabaseClient) {}
 
-  async listTreeByClass(classId: string) {
+  private async loadNotesByIdsInternal(
+    classId: string,
+    noteIds: string[],
+    options?: LoadNotesByIdsOptions,
+    includeContent = true,
+  ) {
+    if (noteIds.length === 0) {
+      return new Map<string, EditorNoteRow>();
+    }
+
+    const columns = includeContent
+      ? "content_json, content_version, created_at, id, title, updated_at"
+      : "content_version, created_at, id, title, updated_at";
+    const { data: noteData, error: noteError } = await this.client
+      .from("editor_notes")
+      .select(columns)
+      .in("id", noteIds);
+
+    if (noteError) {
+      throw noteError;
+    }
+
+    const noteMap = new Map<string, EditorNoteRow>();
+
+    (noteData ?? []).forEach((row) => {
+      const note = row as unknown as EditorNoteRow;
+
+      if (!includeContent || note.content_json === undefined) {
+        noteMap.set(note.id, note);
+        return;
+      }
+
+      try {
+        noteMap.set(note.id, {
+          ...note,
+          content_json: parseNoteDocument(note.content_json),
+        });
+      } catch (error) {
+        void options?.onInvalidNoteDocument?.({
+          classId,
+          error: error instanceof Error ? error.message : "Invalid note document.",
+          noteId: note.id,
+        });
+
+        noteMap.set(note.id, {
+          ...note,
+          content_json: EMPTY_NOTE_DOCUMENT,
+        });
+      }
+    });
+
+    return noteMap;
+  }
+
+  async listTreeByClass(classId: string, options?: ListTreeByClassOptions) {
     const { data, error } = await this.client
       .from("editor_tree_nodes")
       .select(
@@ -97,23 +177,14 @@ export class SupabaseTreeRepository {
     const treeRows = (data ?? []) as TreeNodeRow[];
     const noteIds = treeRows
       .flatMap((row) => (row.note_id ? [row.note_id] : []));
-    const noteMap = new Map<string, EditorNoteRow>();
-
-    if (noteIds.length > 0) {
-      const { data: noteData, error: noteError } = await this.client
-        .from("editor_notes")
-        .select("body, created_at, id, title, updated_at")
-        .in("id", noteIds);
-
-      if (noteError) {
-        throw noteError;
-      }
-
-      (noteData ?? []).forEach((row) => {
-        const note = row as EditorNoteRow;
-        noteMap.set(note.id, note);
-      });
-    }
+    const noteMap = await this.loadNotesByIdsInternal(
+      classId,
+      noteIds,
+      {
+        onInvalidNoteDocument: options?.onInvalidNoteDocument,
+      },
+      options?.includeNoteContent !== false,
+    );
 
     if (treeRows.length === 0) {
       throw new Error(`Class "${classId}" does not exist.`);
@@ -133,13 +204,31 @@ export class SupabaseTreeRepository {
     );
   }
 
+  async loadNotesByIds(
+    classId: string,
+    noteIds: string[],
+    options?: LoadNotesByIdsOptions,
+  ) {
+    return this.loadNotesByIdsInternal(classId, noteIds, options, true);
+  }
+
+  async loadNoteById(
+    classId: string,
+    noteId: string,
+    options?: LoadNotesByIdsOptions,
+  ) {
+    const noteMap = await this.loadNotesByIdsInternal(classId, [noteId], options, true);
+    return noteMap.get(noteId) ?? null;
+  }
+
   async replaceTree(classId: string, nodes: TreeNode[]) {
     const nextNodes = sortTreeNodes(ensureTreeRoot(nodes, classId));
     const rows = nextNodes.map(toTreeNodeRow);
     const nodeIds = nextNodes.map((node) => node.id);
     const noteNodes = nextNodes.filter((node) => node.kind === "note");
-    const noteRows = noteNodes.map(toEditorNoteRow);
-    const noteIds = noteRows.map((row) => row.id);
+    const loadedNoteNodes = noteNodes.filter((node) => node.contentJson !== undefined);
+    const loadedNoteRows = loadedNoteNodes.map(toEditorNoteRow);
+    const retainedNoteIds = noteNodes.map((node) => node.noteId ?? node.id);
 
     const { data: existingRows, error: listError } = await this.client
       .from("editor_tree_nodes")
@@ -150,10 +239,10 @@ export class SupabaseTreeRepository {
       throw listError;
     }
 
-    if (noteRows.length > 0) {
+    if (loadedNoteRows.length > 0) {
       const { error: upsertNotesError } = await this.client
         .from("editor_notes")
-        .upsert(noteRows, {
+        .upsert(loadedNoteRows, {
           onConflict: "user_id,id",
         });
 
@@ -181,7 +270,7 @@ export class SupabaseTreeRepository {
       .filter((id) => !nodeIds.includes(id));
     const staleNoteIds = staleRows
       .flatMap((row) => (row.note_id ? [row.note_id] : []))
-      .filter((id) => !noteIds.includes(id));
+      .filter((id) => !retainedNoteIds.includes(id));
 
     if (staleNodeIds.length > 0) {
       const { error: deleteError } = await this.client

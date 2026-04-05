@@ -1,6 +1,6 @@
 import {
   ASSISTANT_ACTION_BEHAVIOR,
-  normalizeGeneratedHtml,
+  normalizeGeneratedNoteDocument,
   parseAssistantCommand,
 } from "./assistant-contract";
 import {
@@ -60,10 +60,20 @@ describe("assistant contract", () => {
     ).toThrow("Assistant generate_note action is missing a prompt.");
   });
 
-  test("normalizes fenced html and rejects plain markdown", () => {
-    expect(normalizeGeneratedHtml("```html\n<h1>Title</h1>\n```")).toBe("<h1>Title</h1>");
-    expect(() => normalizeGeneratedHtml("# Markdown")).toThrow(
-      "AI returned note content without HTML.",
+  test("normalizes note JSON and rejects invalid output", () => {
+    expect(
+      normalizeGeneratedNoteDocument(
+        JSON.stringify({
+          type: "doc",
+          content: [{ type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "Title" }] }],
+        }),
+      ),
+    ).toEqual({
+      type: "doc",
+      content: [{ type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "Title" }] }],
+    });
+    expect(() => normalizeGeneratedNoteDocument("# Markdown")).toThrow(
+      "AI returned invalid JSON for note content.",
     );
   });
 

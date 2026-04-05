@@ -45,6 +45,13 @@ import {
   type TreeNodeKind,
   updateNodeInTree,
 } from "@/lib/tree-repository";
+import {
+  formatRetryDelay,
+  parseRateLimit,
+  parseSampledResponse,
+  type ClientRateLimitState,
+} from "@/lib/api/client-rate-limit";
+import { FloatingPopupBanner } from "@/app/_components/floating-popup-banner";
 
 import { supabase } from "../../../../_global/authentication/supabaseClient";
 import { handleGoogleSignIn } from "../../../../_global/authentication/authentication";
@@ -135,6 +142,22 @@ type GenerateNoteResponse = {
   title?: string;
 };
 
+type NoteGenerationErrorKind = "error" | "rate_limited";
+
+type NoteGenerationError = Error & {
+  kind: NoteGenerationErrorKind;
+  retryInSeconds?: number;
+  targetContextId?: string;
+};
+
+type RateLimitedAction =
+  | "chat"
+  | "deletePdf"
+  | "invalidDocLog"
+  | "noteGeneration"
+  | "uploadImage"
+  | "uploadPdf";
+
 type AuthStatus = "loading" | "signed-out" | "signed-in" | "unavailable";
 
 function getSelectableFiles(nodes: TreeNode[], selectedIds: string[]) {
@@ -189,6 +212,33 @@ function buildUpdatedNote(
     updatedAt:
       options?.touchUpdatedAt === false ? node.updatedAt : new Date().toISOString(),
   };
+}
+
+function createNoteGenerationError({
+  kind,
+  message,
+  retryInSeconds,
+  targetContextId,
+}: {
+  kind: NoteGenerationErrorKind;
+  message: string;
+  retryInSeconds?: number;
+  targetContextId?: string;
+}) {
+  const error = new Error(message) as NoteGenerationError;
+  error.kind = kind;
+  error.retryInSeconds = retryInSeconds;
+  error.targetContextId = targetContextId;
+  return error;
+}
+
+function isNoteGenerationError(value: unknown): value is NoteGenerationError {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const kind = Reflect.get(value, "kind");
+  return kind === "error" || kind === "rate_limited";
 }
 
 function mapNoteDocument(
@@ -381,43 +431,6 @@ function buildGeneratedNoteTitle(
   return `Study Notes - ${firstNode.title} + ${sourceNodes.length - 1} more`;
 }
 
-function buildGeneratingNoteDocument(): NoteDocument {
-  return {
-    type: "doc",
-    content: [
-      {
-        type: "paragraph",
-        content: [{ type: "text", marks: [{ type: "bold" }], text: "Generating study notes..." }],
-      },
-      {
-        type: "paragraph",
-        content: [
-          {
-            type: "text",
-            text: "StudyAI is building a structured note from the selected material.",
-          },
-        ],
-      },
-    ],
-  };
-}
-
-function buildGenerationFailureDocument(message: string): NoteDocument {
-  return {
-    type: "doc",
-    content: [
-      {
-        type: "paragraph",
-        content: [{ type: "text", marks: [{ type: "bold" }], text: "Unable to generate note." }],
-      },
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: message }],
-      },
-    ],
-  };
-}
-
 export function WorkspaceShell({
   classId,
   imageStorageBucket,
@@ -460,6 +473,7 @@ export function WorkspaceShell({
     null,
   );
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [isUploadProgressDismissed, setIsUploadProgressDismissed] = useState(false);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(
     supabase ? "loading" : "unavailable",
   );
@@ -471,6 +485,10 @@ export function WorkspaceShell({
   const [pendingUploadParentId, setPendingUploadParentId] = useState<
     string | null
   >(null);
+  const [actionCooldowns, setActionCooldowns] = useState<
+    Partial<Record<RateLimitedAction, number>>
+  >({});
+  const [cooldownTick, setCooldownTick] = useState(0);
 
   const desktopGridColumns = isLeftPaneCollapsed
     ? isChatOpen
@@ -549,6 +567,22 @@ export function WorkspaceShell({
   );
   const draftNoteImageStoragePathsRef = useRef(draftNoteImageStoragePaths);
 
+  useEffect(() => {
+    const hasActiveCooldown = Object.values(actionCooldowns).some(
+      (retryAtMs) => Boolean(retryAtMs && retryAtMs > Date.now()),
+    );
+
+    if (!hasActiveCooldown) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setCooldownTick((current) => current + 1);
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [actionCooldowns]);
+
   const resetWorkspaceState = useCallback(() => {
     setTreeNodes([]);
     setSelectedNodeIds([]);
@@ -562,6 +596,7 @@ export function WorkspaceShell({
     setIsDirty(false);
     setUploadFeedback(null);
     setIsUploadingPdf(false);
+    setIsUploadProgressDismissed(false);
     setPendingUploadParentId(null);
   }, []);
 
@@ -578,27 +613,97 @@ export function WorkspaceShell({
     return nodes;
   }, [authUser, classId, resetWorkspaceState]);
 
+  const getAccessToken = useCallback(async () => {
+    if (!supabase) {
+      return null;
+    }
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    return session?.access_token ?? null;
+  }, []);
+
+  const setCooldown = useCallback(
+    (action: RateLimitedAction, state: ClientRateLimitState) => {
+      if (!state.isRateLimited) {
+        return;
+      }
+
+      setActionCooldowns((current) => ({
+        ...current,
+        [action]: state.retryAtMs,
+      }));
+    },
+    [],
+  );
+
+  const getRemainingCooldown = useCallback(
+    (action: RateLimitedAction) => {
+      const now = Date.now() + cooldownTick * 0;
+      const retryAtMs = actionCooldowns[action] ?? 0;
+
+      if (retryAtMs <= 0) {
+        return 0;
+      }
+
+      return Math.max(0, Math.ceil((retryAtMs - now) / 1000));
+    },
+    [actionCooldowns, cooldownTick],
+  );
+
+  const isCoolingDown = useCallback(
+    (action: RateLimitedAction) => getRemainingCooldown(action) > 0,
+    [getRemainingCooldown],
+  );
+
   const logInvalidNoteDocument = useCallback(async ({
     classId,
     error,
     noteId,
   }: InvalidNoteDocumentLogPayload) => {
     try {
-      await fetch("/api/editor/log-invalid-document", {
+      if (isCoolingDown("invalidDocLog")) {
+        return;
+      }
+
+      const accessToken = await getAccessToken();
+
+      if (!accessToken) {
+        return;
+      }
+
+      const response = await fetch("/api/editor/log-invalid-document", {
         body: JSON.stringify({
           classId,
           error,
           noteId,
         }),
         headers: {
+          Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         method: "POST",
       });
+      const payload = await response.json().catch(() => null);
+
+      if (parseSampledResponse(response, payload)) {
+        return;
+      }
+
+      const rateLimit = parseRateLimit(
+        response,
+        "Too many invalid-document logs. Please wait before retrying.",
+      );
+
+      if (rateLimit.isRateLimited) {
+        setCooldown("invalidDocLog", rateLimit);
+      }
     } catch {
       // Logging should never block the editor from loading.
     }
-  }, []);
+  }, [getAccessToken, isCoolingDown, setCooldown]);
 
   const persistTree = useCallback(
     async (nextNodes: TreeNode[]) => {
@@ -616,18 +721,6 @@ export function WorkspaceShell({
     },
     [authUser, classId],
   );
-
-  const getAccessToken = useCallback(async () => {
-    if (!supabase) {
-      return null;
-    }
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    return session?.access_token ?? null;
-  }, []);
 
   const syncSelectionState = useCallback(
     (
@@ -1198,24 +1291,6 @@ export function WorkspaceShell({
     [persistTree, syncSelectionState],
   );
 
-  const setDraftNoteContent = useCallback((
-    noteId: string,
-    title: string,
-    contentJson: NoteDocument,
-  ) => {
-    setDraftNoteNode((current) => {
-      if (!current || current.kind !== "note" || current.id !== noteId) {
-        return current;
-      }
-
-      return buildUpdatedNote(
-        current,
-        { contentJson, title },
-        { touchUpdatedAt: false },
-      );
-    });
-  }, []);
-
   const createNoteUnderParent = async (
     parentId: string,
     options?: {
@@ -1347,32 +1422,60 @@ export function WorkspaceShell({
   };
 
   const generateNoteFromSources = async ({
-    chatSeedMessages,
+    chatContextId,
     mode,
     prompt,
     sourceNodes,
     targetNoteId,
     title,
   }: {
-    chatSeedMessages?: Message[];
+    chatContextId?: string;
     mode: "new_note" | "overwrite_note";
     prompt: string;
     sourceNodes: TreeNode[];
     targetNoteId?: string;
     title?: string;
   }) => {
+    const generationCooldownSeconds = getRemainingCooldown("noteGeneration");
+
+    if (generationCooldownSeconds > 0) {
+      const cooldownMessage = `Note generation is temporarily rate limited. Try again in ${formatRetryDelay(generationCooldownSeconds)}.`;
+      setUploadFeedback({
+        type: "error",
+        message: cooldownMessage,
+      });
+      throw createNoteGenerationError({
+        kind: "rate_limited",
+        message: cooldownMessage,
+        retryInSeconds: generationCooldownSeconds,
+        targetContextId: chatContextId,
+      });
+    }
+
     if (!supabase || authStatus !== "signed-in") {
-      throw new Error("Sign in with Google to use AI note generation.");
+      throw createNoteGenerationError({
+        kind: "error",
+        message: "Sign in with Google to use AI note generation.",
+        targetContextId: chatContextId,
+      });
     }
 
     if (!rootNode) {
-      throw new Error("Class root is unavailable.");
+      throw createNoteGenerationError({
+        kind: "error",
+        message: "Class root is unavailable.",
+        targetContextId: chatContextId,
+      });
     }
 
     const accessToken = await getAccessToken();
 
     if (!accessToken) {
-      throw new Error("Sign in with Google to use AI note generation.");
+      throw createNoteGenerationError({
+        kind: "error",
+        message: "Sign in with Google to use AI note generation.",
+        targetContextId: chatContextId,
+      });
     }
 
     let effectiveMode = mode;
@@ -1381,6 +1484,7 @@ export function WorkspaceShell({
         ? (treeNodesRef.current.find((node) => node.id === targetNoteId) ??
           null)
         : null;
+    let targetContextId = targetNode?.id ?? chatContextId;
 
     const fallbackTitle =
       targetNode?.kind === "note" && !title
@@ -1395,16 +1499,15 @@ export function WorkspaceShell({
       })) ?? null;
 
       if (!targetNode || targetNode.kind !== "note") {
-        throw new Error("Unable to create a note for AI generation.");
-      }
-
-      if (chatSeedMessages) {
-        setMessagesForContext(targetNode.id, chatSeedMessages);
+        throw createNoteGenerationError({
+          kind: "error",
+          message: "Unable to create a note for AI generation.",
+          targetContextId: chatContextId,
+        });
       }
     }
 
-    setDraftNoteContent(targetNode.id, fallbackTitle, buildGeneratingNoteDocument());
-    setIsDirty(false);
+    targetContextId = targetNode.id;
 
     const response = await fetch("/api/notes/generate", {
       method: "POST",
@@ -1429,15 +1532,37 @@ export function WorkspaceShell({
     const payload = (await response
       .json()
       .catch(() => null)) as GenerateNoteResponse | null;
+    const generationRateLimit = parseRateLimit(
+      response,
+      payload?.error || "Too many note-generation requests. Please try again shortly.",
+    );
+
+    if (generationRateLimit.isRateLimited) {
+      setCooldown("noteGeneration", generationRateLimit);
+      const cooldownMessage = `${generationRateLimit.message} Try again in ${formatRetryDelay(generationRateLimit.retryInSeconds)}.`;
+      setUploadFeedback({
+        type: "error",
+        message: cooldownMessage,
+      });
+      throw createNoteGenerationError({
+        kind: "rate_limited",
+        message: cooldownMessage,
+        retryInSeconds: generationRateLimit.retryInSeconds,
+        targetContextId,
+      });
+    }
 
     if (!response.ok || !payload?.contentJson) {
       const errorMessage = payload?.error || "Unable to generate note.";
-      const failedNode = buildUpdatedNote(targetNode, {
-        contentJson: buildGenerationFailureDocument(errorMessage),
-        title: fallbackTitle,
+      setUploadFeedback({
+        type: "error",
+        message: errorMessage,
       });
-      await persistNoteNode(failedNode);
-      throw new Error(errorMessage);
+      throw createNoteGenerationError({
+        kind: "error",
+        message: errorMessage,
+        targetContextId,
+      });
     }
 
     const completedNode = buildUpdatedNote(targetNode, {
@@ -1482,6 +1607,7 @@ export function WorkspaceShell({
 
       try {
         await generateNoteFromSources({
+          chatContextId: node.id,
           mode: "new_note",
           prompt:
             "Create a premium-quality study note from the selected sources. Be concise, highly structured, exam-focused, and use tables or lists where they add clarity.",
@@ -1562,6 +1688,14 @@ export function WorkspaceShell({
       let nextNodes = treeNodesRef.current;
 
       if (fileNodesToDelete.length > 0) {
+        const deleteCooldownSeconds = getRemainingCooldown("deletePdf");
+
+        if (deleteCooldownSeconds > 0) {
+          throw new Error(
+            `Delete is temporarily rate limited. Try again in ${formatRetryDelay(deleteCooldownSeconds)}.`,
+          );
+        }
+
         const accessToken = await getAccessToken();
 
         if (!accessToken) {
@@ -1582,6 +1716,17 @@ export function WorkspaceShell({
         const payload = (await response
           .json()
           .catch(() => null)) as DeletePdfResponse | null;
+        const deleteRateLimit = parseRateLimit(
+          response,
+          payload?.error || "Too many delete requests. Please wait before retrying.",
+        );
+
+        if (deleteRateLimit.isRateLimited) {
+          setCooldown("deletePdf", deleteRateLimit);
+          throw new Error(
+            `${deleteRateLimit.message} Try again in ${formatRetryDelay(deleteRateLimit.retryInSeconds)}.`,
+          );
+        }
 
         if (!response.ok) {
           if (payload?.treeUpdated && payload.tree) {
@@ -1704,6 +1849,17 @@ export function WorkspaceShell({
       return;
     }
 
+    const uploadPdfCooldownSeconds = getRemainingCooldown("uploadPdf");
+
+    if (uploadPdfCooldownSeconds > 0) {
+      setUploadFeedback({
+        type: "error",
+        message: `PDF upload is temporarily rate limited. Try again in ${formatRetryDelay(uploadPdfCooldownSeconds)}.`,
+      });
+      return;
+    }
+
+    setIsUploadProgressDismissed(false);
     setIsUploadingPdf(true);
     setUploadFeedback(null);
 
@@ -1729,6 +1885,17 @@ export function WorkspaceShell({
       const payload = (await response
         .json()
         .catch(() => null)) as UploadPdfResponse | null;
+      const uploadPdfRateLimit = parseRateLimit(
+        response,
+        payload?.error || "Too many PDF uploads. Please wait before retrying.",
+      );
+
+      if (uploadPdfRateLimit.isRateLimited) {
+        setCooldown("uploadPdf", uploadPdfRateLimit);
+        throw new Error(
+          `${uploadPdfRateLimit.message} Try again in ${formatRetryDelay(uploadPdfRateLimit.retryInSeconds)}.`,
+        );
+      }
 
       if (!response.ok || !payload?.tree || !payload.fileNode) {
         throw new Error(
@@ -1804,6 +1971,14 @@ export function WorkspaceShell({
 
   const handleUploadImage = useCallback(
     async (file: File, noteId: string) => {
+      const uploadImageCooldownSeconds = getRemainingCooldown("uploadImage");
+
+      if (uploadImageCooldownSeconds > 0) {
+        throw new Error(
+          `Image upload is temporarily rate limited. Try again in ${formatRetryDelay(uploadImageCooldownSeconds)}.`,
+        );
+      }
+
       if (!authUser) {
         throw new Error(AUTH_REQUIRED_MESSAGE);
       }
@@ -1831,6 +2006,17 @@ export function WorkspaceShell({
         method: "POST",
       });
       const payload = (await response.json().catch(() => null)) as UploadImageResponse | null;
+      const uploadImageRateLimit = parseRateLimit(
+        response,
+        payload?.error || "Too many image uploads. Please wait before retrying.",
+      );
+
+      if (uploadImageRateLimit.isRateLimited) {
+        setCooldown("uploadImage", uploadImageRateLimit);
+        throw new Error(
+          `${uploadImageRateLimit.message} Try again in ${formatRetryDelay(uploadImageRateLimit.retryInSeconds)}.`,
+        );
+      }
 
       if (!response.ok || !payload?.signedUrl || !payload.storagePath) {
         throw new Error(payload?.error || "Unable to upload image.");
@@ -1845,7 +2031,7 @@ export function WorkspaceShell({
         width: null,
       };
     },
-    [authUser, classId, getAccessToken, imageStorageBucket],
+    [authUser, classId, getAccessToken, getRemainingCooldown, imageStorageBucket, setCooldown],
   );
 
   const handleSaveNote = async () => {
@@ -1929,6 +2115,18 @@ export function WorkspaceShell({
     const userMessage = createMessage("user", trimmedInput);
     const sourceContextId = activeAiContextId;
     const nextMessages = [...activeChatMessages, userMessage];
+    const chatCooldownSeconds = getRemainingCooldown("chat");
+
+    if (chatCooldownSeconds > 0) {
+      setMessagesForContext(sourceContextId, [
+        ...activeChatMessages,
+        createMessage(
+          "assistant",
+          `Chat is temporarily rate limited. Try again in ${formatRetryDelay(chatCooldownSeconds)}.`,
+        ),
+      ]);
+      return;
+    }
 
     if (!supabase || authStatus !== "signed-in") {
       setMessagesForContext(sourceContextId, [
@@ -1982,6 +2180,22 @@ export function WorkspaceShell({
       const payload = (await response
         .json()
         .catch(() => null)) as ChatResponse | null;
+      const chatRateLimit = parseRateLimit(
+        response,
+        payload?.error || "Too many chat requests. Please try again shortly.",
+      );
+
+      if (chatRateLimit.isRateLimited) {
+        setCooldown("chat", chatRateLimit);
+        setMessagesForContext(sourceContextId, [
+          ...nextMessages,
+          createMessage(
+            "assistant",
+            `${chatRateLimit.message} Try again in ${formatRetryDelay(chatRateLimit.retryInSeconds)}.`,
+          ),
+        ]);
+        return;
+      }
 
       if (!response.ok || !payload?.assistant) {
         throw new Error(
@@ -2013,25 +2227,45 @@ export function WorkspaceShell({
         payload.assistant.target === "current_note" &&
         selectedNodeKind === "note";
 
-      if (shouldOverwriteCurrent) {
-        setMessagesForContext(sourceContextId, [
-          ...nextMessages,
-          assistantMessage,
-        ]);
-      }
-
-      await generateNoteFromSources({
-        chatSeedMessages: shouldOverwriteCurrent
-          ? undefined
-          : [userMessage, assistantMessage],
+      const generatedNode = await generateNoteFromSources({
+        chatContextId: sourceContextId,
         mode: shouldOverwriteCurrent ? "overwrite_note" : "new_note",
         prompt: payload.assistant.prompt,
         sourceNodes,
         targetNoteId: shouldOverwriteCurrent ? sourceContextId : undefined,
         title: payload.assistant.title,
       });
+      const successContextId = shouldOverwriteCurrent
+        ? sourceContextId
+        : generatedNode.id;
+
+      if (successContextId === sourceContextId) {
+        setMessagesForContext(sourceContextId, [
+          ...nextMessages,
+          assistantMessage,
+        ]);
+      } else {
+        setMessagesForContext(successContextId, [
+          userMessage,
+          assistantMessage,
+        ]);
+      }
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
+
+      if (isNoteGenerationError(error)) {
+        const targetContextId = error.targetContextId || sourceContextId;
+        const priorMessages =
+          targetContextId === sourceContextId
+            ? nextMessages
+            : (chatSessions[targetContextId] ?? [userMessage]);
+
+        setMessagesForContext(targetContextId, [
+          ...priorMessages,
+          createMessage("assistant", error.message),
+        ]);
         return;
       }
 
@@ -2057,6 +2291,33 @@ export function WorkspaceShell({
         : authStatus === "signed-in"
           ? authUser?.email || authUser?.id || "Signed in"
           : "Continue with Google";
+  const chatCooldownSeconds = getRemainingCooldown("chat");
+  const isChatRateLimited = chatCooldownSeconds > 0;
+  const isChatDisabled = !activeAiContextId || isChatRateLimited;
+  const chatDisabledMessage = activeAiContextId
+    ? `Chat is temporarily rate limited. Try again in ${formatRetryDelay(chatCooldownSeconds)}.`
+    : "Open a note or PDF to chat with StudyAI.";
+  const floatingPopupMessage = isUploadingPdf && !isUploadProgressDismissed
+    ? "Uploading PDF..."
+    : (uploadFeedback?.message ?? "");
+  const floatingPopupVariant = isUploadingPdf && !isUploadProgressDismissed
+    ? "info"
+    : uploadFeedback?.type === "success"
+      ? "success"
+      : uploadFeedback?.type === "error"
+        ? "error"
+        : "info";
+  const floatingPopupAutoDismissMs = isUploadingPdf && !isUploadProgressDismissed
+    ? null
+    : 8_000;
+  const handleCloseFloatingPopup = () => {
+    if (isUploadingPdf) {
+      setIsUploadProgressDismissed(true);
+      return;
+    }
+
+    setUploadFeedback(null);
+  };
 
   return (
     <main className='workspace-shell flex h-screen flex-col overflow-hidden'>
@@ -2073,24 +2334,14 @@ export function WorkspaceShell({
         onSignIn={handleGoogleSignIn}
         onSignOut={handleSignOut}
       />
-      {isUploadingPdf || uploadFeedback ? (
-        <div className="border-b border-(--border-soft) bg-(--surface-panel-strong) px-4 py-2">
-          <p
-            className={`text-sm ${
-              uploadFeedback?.type === "error"
-                ? "text-(--accent)"
-                : uploadFeedback?.type === "success"
-                  ? "text-(--main)"
-                  : "text-(--text-main)"
-            }`}
-            data-testid="workspace-feedback"
-          >
-            {isUploadingPdf
-              ? "Uploading PDF..."
-              : uploadFeedback?.message ?? ""}
-          </p>
-        </div>
-      ) : null}
+      <FloatingPopupBanner
+        autoDismissMs={floatingPopupAutoDismissMs}
+        message={floatingPopupMessage}
+        onClose={handleCloseFloatingPopup}
+        open={Boolean(floatingPopupMessage)}
+        testId="workspace-feedback"
+        variant={floatingPopupVariant}
+      />
       <input
         ref={pdfUploadInputRef}
         accept='application/pdf,.pdf'
@@ -2159,8 +2410,8 @@ export function WorkspaceShell({
         {isChatOpen ? (
           <div className='relative h-full min-h-0 min-w-0 overflow-hidden lg:col-span-2 xl:col-span-1'>
             <ChatPane
-              disabled={!activeAiContextId}
-              disabledMessage='Open a note or PDF to chat with StudyAI.'
+              disabled={isChatDisabled}
+              disabledMessage={chatDisabledMessage}
               locked={lockIn}
               isStreaming={isChatStreaming}
               onHide={handleHideChat}

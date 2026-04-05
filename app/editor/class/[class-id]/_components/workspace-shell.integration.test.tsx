@@ -1,8 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WorkspaceShell } from "./workspace-shell";
 import type { AssistantCommand } from "@/lib/ai/assistant-contract";
+import {
+  EMPTY_NOTE_DOCUMENT,
+  noteDocumentToPlainText,
+  type NoteDocument,
+} from "@/lib/note-document";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
-import { moveNodeInTree } from "@/lib/tree-repository";
+import { moveNodeInTree, type TreeNode } from "@/lib/tree-repository";
 
 jest.mock("@/lib/supabase-browser", () => ({
   getSupabaseBrowserClient: jest.fn(),
@@ -56,6 +61,7 @@ jest.mock("./chat-pane", () => ({
 jest.mock("./editor-pane", () => ({
   EditorPane: ({
     isDirty,
+    isNoteLoading,
     noteId,
     note,
     onBodyChange,
@@ -65,9 +71,10 @@ jest.mock("./editor-pane", () => ({
     onTitleChange,
   }: {
     isDirty: boolean;
+    isNoteLoading?: boolean;
     noteId: string | null;
-    note: { title: string; body: string } | null;
-    onBodyChange: (body: string) => void;
+    note: { title: string; contentJson: NoteDocument } | null;
+    onBodyChange: (contentJson: NoteDocument) => void;
     onDelete: () => void;
     pdfDocument?: { dataUrl: string; title: string } | null;
     onSave: () => void;
@@ -75,16 +82,56 @@ jest.mock("./editor-pane", () => ({
   }) => (
     <div>
       <p data-testid="draft-state">{isDirty ? "dirty" : "clean"}</p>
+      <p data-testid="draft-loading">{isNoteLoading ? "loading" : "idle"}</p>
       <p data-testid="draft-id">{noteId ?? "none"}</p>
       <p data-testid="draft-title">{note?.title ?? "none"}</p>
-      <p data-testid="draft-body">{note?.body ?? "none"}</p>
+      <p data-testid="draft-body">{note ? JSON.stringify(note.contentJson) : "none"}</p>
+      <p data-testid="draft-body-text">
+        {note ? noteDocumentToPlainText(note.contentJson) : "none"}
+      </p>
       <p data-testid="pdf-title">{pdfDocument?.title ?? "none"}</p>
       <p data-testid="pdf-url">{pdfDocument?.dataUrl ?? "none"}</p>
       <button onClick={() => onTitleChange("Fresh note")} type="button">
         Update draft title
       </button>
-      <button onClick={() => onBodyChange("<p>Fresh body</p>")} type="button">
+      <button
+        onClick={() =>
+          onBodyChange({
+            type: "doc",
+            content: [{ type: "paragraph", content: [{ type: "text", text: "Fresh body" }] }],
+          })
+        }
+        type="button"
+      >
         Update draft body
+      </button>
+      <button
+        onClick={() =>
+          onBodyChange({
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [
+                  {
+                    type: "image",
+                    attrs: {
+                      alt: "Diagram",
+                      mimeType: "image/png",
+                      src: "https://signed.example/user-123%2Fcs101-ai%2Fnote-1%2Fdiagram.png",
+                      storagePath: "user-123/cs101-ai/note-1/diagram.png",
+                      title: "diagram.png",
+                      width: 320,
+                    },
+                  },
+                ],
+              },
+            ],
+          })
+        }
+        type="button"
+      >
+        Update draft body with image
       </button>
       <button onClick={onSave} type="button">
         Save draft
@@ -119,13 +166,45 @@ type TreeRow = {
 };
 
 type NoteRow = {
-  body: string;
+  content_json: NoteDocument;
+  content_version: number;
   created_at: string;
   id: string;
   title: string;
   updated_at: string;
   user_id: string;
 };
+
+function createParagraphDocument(text: string): NoteDocument {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
+function createImageDocument(src: string, storagePath: string): NoteDocument {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "image",
+            attrs: {
+              alt: "Diagram",
+              mimeType: "image/png",
+              src,
+              storagePath,
+              title: "diagram.png",
+              width: 320,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
 
 class FakeTableQuery<Row extends Record<string, unknown>> {
   private readonly equals = new Map<string, string>();
@@ -136,6 +215,11 @@ class FakeTableQuery<Row extends Record<string, unknown>> {
     private readonly rows: Row[],
     private readonly mode: "select" | "delete",
     private readonly columns?: string,
+    private readonly onExecute?: (details: {
+      columns?: string;
+      equals: Record<string, string>;
+      inFilter: { field: string; values: string[] } | null;
+    }) => void,
   ) {}
 
   eq(field: string, value: string) {
@@ -154,6 +238,12 @@ class FakeTableQuery<Row extends Record<string, unknown>> {
   }
 
   private execute() {
+    this.onExecute?.({
+      columns: this.columns,
+      equals: Object.fromEntries(this.equals.entries()),
+      inFilter: this.inFilter,
+    });
+
     let filteredRows = this.rows.filter((row) =>
       Array.from(this.equals.entries()).every(
         ([field, value]) => String(row[field]) === value,
@@ -161,15 +251,17 @@ class FakeTableQuery<Row extends Record<string, unknown>> {
     );
 
     if (this.inFilter) {
+      const inFilter = this.inFilter;
       filteredRows = filteredRows.filter((row) =>
-        this.inFilter?.values.includes(String(row[this.inFilter.field])),
+        inFilter.values.includes(String(row[inFilter.field])),
       );
     }
 
     if (this.orderField) {
+      const orderField = this.orderField;
       filteredRows = [...filteredRows].sort((left, right) => {
-        const leftValue = left[this.orderField];
-        const rightValue = right[this.orderField];
+        const leftValue = left[orderField];
+        const rightValue = right[orderField];
         return Number(leftValue) - Number(rightValue);
       });
     }
@@ -239,6 +331,11 @@ function createFakeSupabaseClient(user: SessionUser | null) {
   const uploadedFiles = new Map<string, File>();
   const removedPaths: string[][] = [];
   const signedUrlCalls: string[] = [];
+  const noteSelectCalls: Array<{
+    columns?: string;
+    equals: Record<string, string>;
+    inFilter: { field: string; values: string[] } | null;
+  }> = [];
   const upload = jest.fn().mockImplementation(async (path: string, file: File) => {
     uploadedFiles.set(path, file);
     return { error: null };
@@ -257,8 +354,18 @@ function createFakeSupabaseClient(user: SessionUser | null) {
       error: null,
     };
   });
+  const createSignedUrls = jest.fn().mockImplementation(async (paths: string[]) => {
+    paths.forEach((path) => signedUrlCalls.push(path));
+    return {
+      data: paths.map((path) => ({
+        signedUrl: `https://signed.example/${encodeURIComponent(path)}`,
+      })),
+      error: null,
+    };
+  });
   const storageApi = {
     createSignedUrl,
+    createSignedUrls,
     remove,
     upload,
   };
@@ -322,7 +429,10 @@ function createFakeSupabaseClient(user: SessionUser | null) {
 
       if (table === "editor_notes") {
         return {
-          select: (columns: string) => new FakeTableQuery(noteRows, "select", columns),
+          select: (columns: string) =>
+            new FakeTableQuery(noteRows, "select", columns, (details) => {
+              noteSelectCalls.push(details);
+            }),
           upsert: async (rows: Omit<NoteRow, "user_id">[]) => {
             rows.forEach((row) => {
               const fullRow: NoteRow = {
@@ -356,6 +466,7 @@ function createFakeSupabaseClient(user: SessionUser | null) {
     __treeRows: treeRows,
     __uploadedFiles: uploadedFiles,
     __removedPaths: removedPaths,
+    __noteSelectCalls: noteSelectCalls,
     __signedUrlCalls: signedUrlCalls,
     __emitAuthStateChange: (event: string, nextUser: SessionUser | null) => {
       authStateChangeCallback?.(event, nextUser ? { user: nextUser } : null);
@@ -363,7 +474,7 @@ function createFakeSupabaseClient(user: SessionUser | null) {
   };
 }
 
-function toTreeNodes(fakeSupabase: ReturnType<typeof createFakeSupabaseClient>) {
+function toTreeNodes(fakeSupabase: ReturnType<typeof createFakeSupabaseClient>): TreeNode[] {
   return [...fakeSupabase.__treeRows]
     .sort((left, right) => left.order_index - right.order_index)
     .map((row) => {
@@ -372,8 +483,8 @@ function toTreeNodes(fakeSupabase: ReturnType<typeof createFakeSupabaseClient>) 
         : null;
 
       return {
-        body: note?.body,
         classId: row.class_id,
+        contentJson: note?.content_json,
         createdAt: row.created_at,
         fileMimeType: row.file_mime_type ?? undefined,
         fileSize: row.file_size ?? undefined,
@@ -389,7 +500,7 @@ function toTreeNodes(fakeSupabase: ReturnType<typeof createFakeSupabaseClient>) 
     });
 }
 
-function applyTree(fakeSupabase: ReturnType<typeof createFakeSupabaseClient>, tree: ReturnType<typeof toTreeNodes>) {
+function applyTree(fakeSupabase: ReturnType<typeof createFakeSupabaseClient>, tree: TreeNode[]) {
   fakeSupabase.__treeRows.splice(0, fakeSupabase.__treeRows.length);
   fakeSupabase.__noteRows.splice(0, fakeSupabase.__noteRows.length);
 
@@ -412,7 +523,8 @@ function applyTree(fakeSupabase: ReturnType<typeof createFakeSupabaseClient>, tr
 
     if (node.kind === "note") {
       fakeSupabase.__noteRows.push({
-        body: node.body ?? "<p></p>",
+        content_json: node.contentJson ?? EMPTY_NOTE_DOCUMENT,
+        content_version: 1,
         created_at: node.createdAt,
         id: node.noteId ?? node.id,
         title: node.title,
@@ -425,7 +537,7 @@ function applyTree(fakeSupabase: ReturnType<typeof createFakeSupabaseClient>, tr
 
 function seedTree(
   fakeSupabase: ReturnType<typeof createFakeSupabaseClient>,
-  tree: ReturnType<typeof toTreeNodes>,
+  tree: TreeNode[],
 ) {
   applyTree(fakeSupabase, tree);
 }
@@ -443,7 +555,7 @@ describe("WorkspaceShell note flow", () => {
     action: "reply",
     message: "Structured reply",
   };
-  let nextGeneratedHtml = "<h1>Generated Study Note</h1><p>Focused summary.</p>";
+  let nextGeneratedContentJson = createParagraphDocument("Focused summary.");
   let nextGeneratedTitle: string | null = null;
   let lastChatBody: Record<string, unknown> | null = null;
   let lastGenerateBody: Record<string, unknown> | null = null;
@@ -471,7 +583,7 @@ describe("WorkspaceShell note flow", () => {
       action: "reply",
       message: "Structured reply",
     };
-    nextGeneratedHtml = "<h1>Generated Study Note</h1><p>Focused summary.</p>";
+    nextGeneratedContentJson = createParagraphDocument("Focused summary.");
     nextGeneratedTitle = null;
     lastChatBody = null;
     lastGenerateBody = null;
@@ -505,7 +617,7 @@ describe("WorkspaceShell note flow", () => {
 
         return {
           json: async () => ({
-            html: nextGeneratedHtml,
+            contentJson: nextGeneratedContentJson,
             ...(nextGeneratedTitle ? { title: nextGeneratedTitle } : {}),
           }),
           ok: true,
@@ -651,8 +763,9 @@ describe("WorkspaceShell note flow", () => {
     render(
       <WorkspaceShell
         classId={classId}
+        imageStorageBucket="uploaded-images"
+        pdfStorageBucket="uploaded-pdfs"
         requestedClassId={classId}
-        storageBucket="uploaded-pdfs"
         usedFallback={false}
       />,
     );
@@ -757,10 +870,143 @@ describe("WorkspaceShell note flow", () => {
     expect(fakeSupabase.__noteRows).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          body: "<p>Fresh body</p>",
+          content_json: createParagraphDocument("Fresh body"),
+          content_version: 1,
           id: "test-uuid-1",
           title: "Fresh note",
           user_id: "user-123",
+        }),
+      ]),
+    );
+  });
+
+  test("hydrates signed image URLs in draft state and persists storage paths on save", async () => {
+    const storagePath = "user-123/cs101-ai/note-1/diagram.png";
+    seedTree(fakeSupabase, [
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "root:cs101-ai",
+        kind: "root",
+        order: 0,
+        parentId: null,
+        title: "cs101-ai",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        contentJson: createImageDocument(storagePath, storagePath),
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "note-node-1",
+        kind: "note",
+        noteId: "note-1",
+        order: 1,
+        parentId: "root:cs101-ai",
+        title: "Image note",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+    ]);
+
+    renderWorkspace();
+
+    const noteLabel = await findTreeRowLabel("Image note");
+    await act(async () => {
+      fireEvent.click(noteLabel);
+    });
+
+    const signedUrl = `https://signed.example/${encodeURIComponent(storagePath)}`;
+    await waitFor(() => {
+      expect(screen.getByTestId("draft-body")).toHaveTextContent(signedUrl);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    });
+
+    await waitFor(() => {
+      const savedNote = fakeSupabase.__noteRows.find((row) => row.id === "note-1");
+      expect(savedNote).toBeDefined();
+      const imageNode = savedNote?.content_json.content?.[0]?.content?.[0];
+      expect(imageNode?.attrs?.storagePath).toBe(storagePath);
+      expect(imageNode?.attrs?.src).toBe(storagePath);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("draft-body")).toHaveTextContent(signedUrl);
+    });
+  });
+
+  test("loads note metadata first and fetches only the selected note body on demand", async () => {
+    seedTree(fakeSupabase, [
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "root:cs101-ai",
+        kind: "root",
+        order: 0,
+        parentId: null,
+        title: "cs101-ai",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        contentJson: createParagraphDocument("Alpha body"),
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "note-node-1",
+        kind: "note",
+        noteId: "note-1",
+        order: 1,
+        parentId: "root:cs101-ai",
+        title: "Alpha",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        contentJson: createParagraphDocument("Beta body"),
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "note-node-2",
+        kind: "note",
+        noteId: "note-2",
+        order: 2,
+        parentId: "root:cs101-ai",
+        title: "Beta",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+    ]);
+
+    renderWorkspace();
+
+    const alphaLabel = await findTreeRowLabel("Alpha");
+    expect(screen.getByTestId("draft-id")).toHaveTextContent("none");
+    await waitFor(() => {
+      expect(fakeSupabase.__noteSelectCalls.length).toBeGreaterThan(0);
+    });
+    expect(fakeSupabase.__noteSelectCalls[0]).toEqual(
+      expect.objectContaining({
+        columns: "content_version, created_at, id, title, updated_at",
+        inFilter: {
+          field: "id",
+          values: ["note-1", "note-2"],
+        },
+      }),
+    );
+
+    await act(async () => {
+      fireEvent.click(alphaLabel.closest("button") ?? alphaLabel);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("draft-body-text")).toHaveTextContent("Alpha body");
+    });
+
+    expect(fakeSupabase.__noteSelectCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          columns: "content_json, content_version, created_at, id, title, updated_at",
+          inFilter: {
+            field: "id",
+            values: ["note-1"],
+          },
         }),
       ]),
     );
@@ -1015,7 +1261,7 @@ describe("WorkspaceShell note flow", () => {
     expect(screen.getByTestId("pdf-title")).toHaveTextContent("lecture.pdf");
   });
 
-  test("routes chat generate_note to a new note and persists generated html", async () => {
+  test("routes chat generate_note to a new note and persists generated JSON", async () => {
     renderWorkspace();
 
     await createRootNote();
@@ -1027,7 +1273,13 @@ describe("WorkspaceShell note flow", () => {
       target: "new_note",
       title: "AI Study Sheet",
     };
-    nextGeneratedHtml = "<h1>AI Study Sheet</h1><p>Condensed concepts.</p>";
+    nextGeneratedContentJson = {
+      type: "doc",
+      content: [
+        { type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "AI Study Sheet" }] },
+        { type: "paragraph", content: [{ type: "text", text: "Condensed concepts." }] },
+      ],
+    };
     nextGeneratedTitle = "AI Study Sheet";
 
     const sourceNoteId = screen.getByTestId("draft-id").textContent;
@@ -1037,8 +1289,8 @@ describe("WorkspaceShell note flow", () => {
     await waitFor(() => {
       expect(screen.getByTestId("draft-title")).toHaveTextContent("AI Study Sheet");
     });
-    expect(screen.getByTestId("draft-body")).toHaveTextContent(
-      "<h1>AI Study Sheet</h1><p>Condensed concepts.</p>",
+    expect(screen.getByTestId("draft-body-text")).toHaveTextContent(
+      "AI Study Sheet Condensed concepts.",
     );
     expect(screen.getByTestId("chat-messages")).toHaveTextContent(
       "user:Make a new study note from this | assistant:Creating a fresh study note.",
@@ -1067,15 +1319,21 @@ describe("WorkspaceShell note flow", () => {
       prompt: "Rewrite the open note into premium study notes.",
       target: "current_note",
     };
-    nextGeneratedHtml = "<h2>Overwritten</h2><p>New body.</p>";
+    nextGeneratedContentJson = {
+      type: "doc",
+      content: [
+        { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Overwritten" }] },
+        { type: "paragraph", content: [{ type: "text", text: "New body." }] },
+      ],
+    };
 
     const noteId = screen.getByTestId("draft-id").textContent;
 
     await sendChatMessage("Overwrite this note with better study notes");
 
     await waitFor(() => {
-      expect(screen.getByTestId("draft-body")).toHaveTextContent(
-        "<h2>Overwritten</h2><p>New body.</p>",
+      expect(screen.getByTestId("draft-body-text")).toHaveTextContent(
+        "Overwritten New body.",
       );
     });
     expect(screen.getByTestId("draft-id")).toHaveTextContent(noteId ?? "");
@@ -1104,16 +1362,20 @@ describe("WorkspaceShell note flow", () => {
       target: "current_note",
       title: "PDF Notes",
     };
-    nextGeneratedHtml = "<h1>PDF Notes</h1><p>PDF summary.</p>";
+    nextGeneratedContentJson = {
+      type: "doc",
+      content: [
+        { type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "PDF Notes" }] },
+        { type: "paragraph", content: [{ type: "text", text: "PDF summary." }] },
+      ],
+    };
 
     await sendChatMessage("Overwrite this with notes");
 
     await waitFor(() => {
       expect(screen.getByTestId("draft-title")).toHaveTextContent("PDF Notes");
     });
-    expect(screen.getByTestId("draft-body")).toHaveTextContent(
-      "<h1>PDF Notes</h1><p>PDF summary.</p>",
-    );
+    expect(screen.getByTestId("draft-body-text")).toHaveTextContent("PDF Notes PDF summary.");
     expect(lastGenerateBody).toMatchObject({
       mode: "new_note",
       title: "PDF Notes",
@@ -1133,8 +1395,8 @@ describe("WorkspaceShell note flow", () => {
         updatedAt: "2026-04-01T00:00:00.000Z",
       },
       {
-        body: "<p>Chapter note body</p>",
         classId: "cs101-ai",
+        contentJson: createParagraphDocument("Chapter note body"),
         createdAt: "2026-04-01T00:00:00.000Z",
         id: "note-node-1",
         kind: "note",
@@ -1202,8 +1464,9 @@ describe("WorkspaceShell note flow", () => {
     render(
       <WorkspaceShell
         classId="unknown-class"
+        imageStorageBucket="uploaded-images"
+        pdfStorageBucket="uploaded-pdfs"
         requestedClassId="unknown-class"
-        storageBucket="uploaded-pdfs"
         usedFallback={false}
       />,
     );
@@ -1373,8 +1636,8 @@ describe("WorkspaceShell note flow", () => {
         updatedAt: "2026-04-01T00:00:00.000Z",
       },
       {
-        body: "<p>Nested</p>",
         classId: "cs101-ai",
+        contentJson: createParagraphDocument("Nested"),
         createdAt: "2026-04-01T00:00:00.000Z",
         id: "note-node-1",
         kind: "note",
@@ -1484,8 +1747,8 @@ describe("WorkspaceShell note flow", () => {
         updatedAt: "2026-04-01T00:00:00.000Z",
       },
       {
-        body: "<p>First</p>",
         classId: "cs101-ai",
+        contentJson: createParagraphDocument("First"),
         createdAt: "2026-04-01T00:00:00.000Z",
         id: "note-node-1",
         kind: "note",
@@ -1496,8 +1759,8 @@ describe("WorkspaceShell note flow", () => {
         updatedAt: "2026-04-01T00:00:00.000Z",
       },
       {
-        body: "<p>Second</p>",
         classId: "cs101-ai",
+        contentJson: createParagraphDocument("Second"),
         createdAt: "2026-04-01T00:00:00.000Z",
         id: "note-node-2",
         kind: "note",

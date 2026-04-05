@@ -9,7 +9,7 @@ import {
 } from "@/lib/tree-repository";
 import {
   createSupabaseServerClient,
-  getSupabaseStorageBucket,
+  getSupabasePdfStorageBucket,
 } from "@/lib/supabase-server";
 
 const MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -169,7 +169,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const bucket = getSupabaseStorageBucket();
+  const bucket = getSupabasePdfStorageBucket();
 
   if (!bucket) {
     return NextResponse.json(
@@ -288,7 +288,7 @@ export async function DELETE(request: Request) {
     );
   }
 
-  const bucket = getSupabaseStorageBucket();
+  const bucket = getSupabasePdfStorageBucket();
 
   if (!bucket) {
     return NextResponse.json(

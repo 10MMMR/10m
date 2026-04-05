@@ -1,5 +1,6 @@
 "use client";
 
+import type { JSONContent } from "@tiptap/core";
 import TextAlign from "@tiptap/extension-text-align";
 import { Table } from "@tiptap/extension-table";
 import TableCell from "@tiptap/extension-table-cell";
@@ -10,7 +11,15 @@ import { FontSize, TextStyle } from "@tiptap/extension-text-style";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
+  EMPTY_NOTE_DOCUMENT,
+  parseNoteDocument,
+  serializeNoteDocumentForComparison,
+  type NoteDocument,
+} from "@/lib/note-document";
+import {
+  type ChangeEvent,
   createElement,
+  type DragEvent,
   type Dispatch,
   useEffect,
   useMemo,
@@ -43,6 +52,7 @@ import {
   UnderlineIcon,
 } from "@heroicons/react/24/outline";
 import { LineHeight, type LineHeightValue } from "./tiptap-line-height";
+import { InlineImage } from "./tiptap-inline-image";
 import {
   EquationBlock,
   type EquationMathFieldElement,
@@ -50,8 +60,8 @@ import {
 import styles from "./editor-pane.module.css";
 
 type EditableDocument = {
+  contentJson: NoteDocument;
   title: string;
-  body: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -68,12 +78,14 @@ type PdfDocument = {
 type EditorPaneProps = {
   lockIn: boolean;
   onToggleLockIn: () => void;
+  isNoteLoading?: boolean;
   noteId: string | null;
   note: EditableDocument | null;
   pdfDocument?: PdfDocument | null;
   isDirty: boolean;
   onTitleChange: (title: string) => void;
-  onBodyChange: (body: string) => void;
+  onBodyChange: (contentJson: NoteDocument) => void;
+  onUploadImage?: (file: File, noteId: string) => Promise<UploadedImage>;
   onSave: () => void;
   onDelete: () => void;
   saveLabel?: string;
@@ -97,6 +109,15 @@ type ToolbarAction =
   | "letteredList"
   | "lineSpacing"
   | "preview";
+
+type UploadedImage = {
+  alt?: string | null;
+  mimeType?: string | null;
+  src: string;
+  storagePath?: string | null;
+  title?: string | null;
+  width?: number | null;
+};
 
 type TableAction =
   | "insertTable"
@@ -240,6 +261,13 @@ type EquationInsertChain = {
     run: () => boolean;
   };
 };
+type EditorSelectionRange = {
+  from: number;
+  to: number;
+};
+
+const IMAGE_UPLOAD_ACCEPT =
+  ".jpg,.jpeg,.png,.gif,.webp,.svg,.heic,image/jpeg,image/png,image/gif,image/webp,image/svg+xml,image/heic,image/heic-sequence";
 
 function getBlockAttribute(editor: EditorInstance, attribute: "lineHeight" | "textAlign") {
   const paragraphValue = editor.getAttributes("paragraph")[attribute];
@@ -307,12 +335,16 @@ function EquationPreview({
 export function EditorPane({
   lockIn,
   onToggleLockIn,
+  isNoteLoading = false,
   noteId,
   note,
   pdfDocument = null,
   isDirty,
   onTitleChange,
   onBodyChange,
+  onUploadImage = async () => {
+    throw new Error("Image upload is unavailable.");
+  },
   onSave,
   onDelete,
   saveLabel = "Save note",
@@ -326,7 +358,13 @@ export function EditorPane({
   const equationPaletteRef = useRef<HTMLDivElement>(null);
   const activeEquationFieldRef = useRef<EquationMathFieldElement | null>(null);
   const bodyUpdateTimeoutRef = useRef<number | null>(null);
-  const lastLocalBodyRef = useRef(note?.body ?? "<p></p>");
+  const imageSelectionRef = useRef<EditorSelectionRange | null>(null);
+  const lastLocalDocumentRef = useRef(
+    serializeNoteDocumentForComparison(note?.contentJson ?? EMPTY_NOTE_DOCUMENT),
+  );
+  const lastPropDocumentRef = useRef(
+    serializeNoteDocumentForComparison(note?.contentJson ?? EMPTY_NOTE_DOCUMENT),
+  );
   const previousNoteIdRef = useRef<string | null>(noteId);
   const [useCompactToolbar, setUseCompactToolbar] = useState(false);
   const [isTableMenuOpen, setIsTableMenuOpen] = useState(false);
@@ -338,6 +376,10 @@ export function EditorPane({
   const [isOverflowLineSpacingMenuOpen, setIsOverflowLineSpacingMenuOpen] =
     useState(false);
   const [isEquationPaletteOpen, setIsEquationPaletteOpen] = useState(false);
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [isImageDropActive, setIsImageDropActive] = useState(false);
   const [equationPalettePosition, setEquationPalettePosition] = useState({
     x: 140,
     y: 180,
@@ -346,8 +388,9 @@ export function EditorPane({
   const [autoFocusEquationId, setAutoFocusEquationId] = useState<string | null>(null);
   const [equationSession, setEquationSession] = useState<EquationSession | null>(null);
   const [editorRevision, setEditorRevision] = useState(0);
-  const canEdit = Boolean(note) && !lockIn;
-  const noteBody = note?.body ?? "<p></p>";
+  const canEdit = Boolean(note) && !lockIn && !isNoteLoading;
+  const noteDocument = note?.contentJson ?? EMPTY_NOTE_DOCUMENT;
+  const serializedNoteDocument = serializeNoteDocumentForComparison(noteDocument);
   const hasActiveEquationField = Boolean(activeEquationId) && canEdit;
   const isEquationPaletteVisible = isEquationPaletteOpen && canEdit && Boolean(noteId);
   const isPdfView = Boolean(pdfDocument) && !note;
@@ -435,12 +478,15 @@ export function EditorPane({
     onEquationEditStart: handleEquationEditStart,
   }) as unknown as EditorExtension;
 
+  const inlineImageExtension = InlineImage as unknown as EditorExtension;
+
   const editor = useEditor({
     extensions: [
       StarterKit,
       Highlight.configure({ multicolor: false }),
       TextStyle,
       FontSize,
+      inlineImageExtension,
       TextAlign.configure({
         types: ["heading", "paragraph"],
       }),
@@ -454,7 +500,7 @@ export function EditorPane({
       TableHeader,
       TableCell,
     ],
-    content: note?.body ?? "<p></p>",
+    content: noteDocument,
     immediatelyRender: false,
     editable: canEdit,
     onUpdate: ({ editor: currentEditor }) => {
@@ -462,10 +508,10 @@ export function EditorPane({
         window.clearTimeout(bodyUpdateTimeoutRef.current);
       }
 
-      const body = currentEditor.getHTML();
-      lastLocalBodyRef.current = body;
+      const nextDocument = parseNoteDocument(currentEditor.getJSON() as JSONContent);
+      lastLocalDocumentRef.current = serializeNoteDocumentForComparison(nextDocument);
       bodyUpdateTimeoutRef.current = window.setTimeout(() => {
-        onBodyChange(body);
+        onBodyChange(nextDocument);
       }, 100);
     },
   });
@@ -583,13 +629,16 @@ export function EditorPane({
     }
 
     const noteChanged = previousNoteIdRef.current !== noteId;
-    const externalBodyChange = lastLocalBodyRef.current !== noteBody;
+    const externalBodyChange = lastLocalDocumentRef.current !== serializedNoteDocument;
+    const propChanged = lastPropDocumentRef.current !== serializedNoteDocument;
 
-    if (!noteChanged && !externalBodyChange) {
+    if (!noteChanged && (!propChanged || !externalBodyChange)) {
+      lastPropDocumentRef.current = serializedNoteDocument;
       return;
     }
 
     previousNoteIdRef.current = noteId;
+    lastPropDocumentRef.current = serializedNoteDocument;
 
     if (!noteId) {
       if (bodyUpdateTimeoutRef.current) {
@@ -597,8 +646,8 @@ export function EditorPane({
         bodyUpdateTimeoutRef.current = null;
       }
 
-      lastLocalBodyRef.current = "<p></p>";
-      editor.commands.setContent("<p></p>", { emitUpdate: false });
+      lastLocalDocumentRef.current = serializeNoteDocumentForComparison(EMPTY_NOTE_DOCUMENT);
+      editor.commands.setContent(EMPTY_NOTE_DOCUMENT, { emitUpdate: false });
       return;
     }
 
@@ -607,12 +656,172 @@ export function EditorPane({
       bodyUpdateTimeoutRef.current = null;
     }
 
-    lastLocalBodyRef.current = noteBody;
+    lastLocalDocumentRef.current = serializedNoteDocument;
 
-    if (editor.getHTML() !== noteBody) {
-      editor.commands.setContent(noteBody, { emitUpdate: false });
+    if (
+      serializeNoteDocumentForComparison(parseNoteDocument(editor.getJSON() as JSONContent)) !==
+      serializedNoteDocument
+    ) {
+      editor.commands.setContent(noteDocument, { emitUpdate: false });
     }
-  }, [editor, noteBody, noteId]);
+  }, [editor, noteDocument, noteId, serializedNoteDocument]);
+
+  useEffect(() => {
+    if (canEdit) {
+      return;
+    }
+
+    setIsImageModalOpen(false);
+    setIsUploadingImage(false);
+    setImageUploadError(null);
+    setIsImageDropActive(false);
+  }, [canEdit]);
+
+  useEffect(() => {
+    setIsImageModalOpen(false);
+    setIsUploadingImage(false);
+    setImageUploadError(null);
+    setIsImageDropActive(false);
+    imageSelectionRef.current = null;
+  }, [noteId]);
+
+  useEffect(() => {
+    if (!isImageModalOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isUploadingImage) {
+        setIsImageModalOpen(false);
+        setImageUploadError(null);
+        setIsImageDropActive(false);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isImageModalOpen, isUploadingImage]);
+
+  useEffect(() => {
+    if (!isImageModalOpen) {
+      return;
+    }
+
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = overflow;
+    };
+  }, [isImageModalOpen]);
+
+  const closeImageModal = () => {
+    if (isUploadingImage) {
+      return;
+    }
+
+    setIsImageModalOpen(false);
+    setImageUploadError(null);
+    setIsImageDropActive(false);
+    imageSelectionRef.current = null;
+  };
+
+  const openImageModal = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+
+    if (!editor || !noteId || !canEdit) {
+      return;
+    }
+
+    imageSelectionRef.current = {
+      from: editor.state.selection.from,
+      to: editor.state.selection.to,
+    };
+    setImageUploadError(null);
+    setIsImageDropActive(false);
+    setIsImageModalOpen(true);
+    closeOverflowMenus();
+  };
+
+  const insertUploadedImage = (uploadedImage: UploadedImage) => {
+    if (!editor) {
+      return;
+    }
+
+    const selection = imageSelectionRef.current;
+    const nextWidth = Math.max(
+      180,
+      Math.min((editorPaneRef.current?.clientWidth ?? 680) - 160, uploadedImage.width ?? 420),
+    );
+    const chain = editor.chain().focus();
+
+    if (selection) {
+      chain.setTextSelection(selection);
+    }
+
+    chain
+      .insertContent({
+        attrs: {
+          alt: uploadedImage.alt ?? uploadedImage.title ?? "Uploaded image",
+          mimeType: uploadedImage.mimeType ?? null,
+          src: uploadedImage.src,
+          storagePath: uploadedImage.storagePath ?? null,
+          title: uploadedImage.title ?? uploadedImage.alt ?? null,
+          width: nextWidth,
+        },
+        type: "image",
+      })
+      .run();
+  };
+
+  const uploadImageFile = async (files: File[]) => {
+    if (!editor || !noteId || !canEdit || isUploadingImage) {
+      return;
+    }
+
+    if (files.length !== 1) {
+      setImageUploadError("Upload one image at a time.");
+      return;
+    }
+
+    const [file] = files;
+
+    if (!file) {
+      return;
+    }
+
+    setIsUploadingImage(true);
+    setImageUploadError(null);
+
+    try {
+      const uploadedImage = await onUploadImage(file, noteId);
+      insertUploadedImage(uploadedImage);
+      setIsImageModalOpen(false);
+      setIsImageDropActive(false);
+      imageSelectionRef.current = null;
+    } catch (error) {
+      setImageUploadError(
+        error instanceof Error ? error.message : "Unable to upload image.",
+      );
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
+  const handleImageInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    await uploadImageFile(files);
+  };
+
+  const handleImageDrop = async (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    setIsImageDropActive(false);
+    await uploadImageFile(Array.from(event.dataTransfer.files ?? []));
+  };
 
   const toolbarState = useMemo(
     () => {
@@ -1250,6 +1459,79 @@ export function EditorPane({
           </div>
         </div>
       ) : null}
+      {isImageModalOpen ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-(--overlay-scrim) p-4 backdrop-blur-sm"
+          onClick={closeImageModal}
+          role="dialog"
+        >
+          <div
+            className="w-full max-w-md rounded-3xl border border-(--border-floating) bg-(--surface-base) p-6 shadow-(--shadow-floating)"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className="text-xs font-semibold uppercase tracking-widest text-(--text-muted)">
+              Add image
+            </p>
+            <h2 className="mt-3 text-2xl font-semibold leading-tight text-(--text-main)">
+              Drop one image into the note.
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-(--text-body)">
+              JPEG, PNG, GIF, WEBP, SVG, and HEIC are supported. Upload starts as
+              soon as the file lands in the box.
+            </p>
+            <label
+              className={`mt-6 flex min-h-52 cursor-pointer flex-col items-center justify-center rounded-[28px] border-2 border-dashed px-6 py-8 text-center transition-colors duration-200 ${
+                isImageDropActive
+                  ? "border-(--main) bg-(--surface-main-soft)"
+                  : "border-(--border-strong) bg-(--surface-input)"
+              } ${isUploadingImage ? "cursor-progress" : ""}`}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setIsImageDropActive(true);
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  return;
+                }
+
+                setIsImageDropActive(false);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setIsImageDropActive(true);
+              }}
+              onDrop={(event) => void handleImageDrop(event)}
+            >
+              <PhotoIcon className="h-9 w-9 text-(--text-main)" aria-hidden="true" />
+              <p className="mt-4 mb-0 text-base font-semibold text-(--text-main)">
+                {isUploadingImage ? "Uploading image..." : "Drag an image here or click this box."}
+              </p>
+              <p className="mt-2 mb-0 text-sm leading-6 text-(--text-muted)">
+                One file at a time. The image is inserted inline after upload.
+              </p>
+              <span className="mt-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-(--text-secondary)">
+                Public upload
+              </span>
+              <input
+                accept={IMAGE_UPLOAD_ACCEPT}
+                className="hidden"
+                disabled={isUploadingImage}
+                onChange={handleImageInputChange}
+                type="file"
+              />
+            </label>
+            <p className="mt-4 mb-0 text-xs uppercase tracking-[0.14em] text-(--text-muted)">
+              Click outside the modal or press escape to close.
+            </p>
+            {imageUploadError ? (
+              <p className="mt-3 mb-0 text-sm leading-6 text-(--destructive)">
+                {imageUploadError}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {!isPdfView ? (
         <div
           ref={toolbarRowRef}
@@ -1352,11 +1634,14 @@ export function EditorPane({
             </button>
             <span className="mx-2 h-8 w-px shrink-0 bg-(--border-soft)" aria-hidden="true" />
             <button
-              className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({ disabled: true })}`}
+              className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
+                disabled: !canEdit,
+              })}`}
               type="button"
               aria-label="Insert image"
-              aria-disabled="true"
-              disabled
+              aria-disabled={!canEdit}
+              disabled={!canEdit}
+              onMouseDown={openImageModal}
             >
               <PhotoIcon className="h-5 w-5" aria-hidden="true" />
             </button>
@@ -1528,11 +1813,12 @@ export function EditorPane({
               {isOverflowMenuOpen ? (
                 <div className="absolute top-[calc(100%+8px)] right-0 z-10 w-44 rounded-2xl border border-(--border-soft) bg-(--surface-base) p-1.5 shadow-(--shadow-floating)">
                   <button
-                    className="flex w-full cursor-not-allowed items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-(--text-muted) opacity-45"
+                    className={tableControlClass({ disabled: !canEdit })}
                     type="button"
                     aria-label="Insert image"
-                    aria-disabled="true"
-                    disabled
+                    aria-disabled={!canEdit}
+                    disabled={!canEdit}
+                    onMouseDown={openImageModal}
                   >
                     <PhotoIcon className="h-4 w-4" aria-hidden="true" />
                     Insert image
@@ -1789,6 +2075,15 @@ export function EditorPane({
                     <EditorContent editor={editor} />
                   </div>
                 </>
+              ) : isNoteLoading ? (
+                <div className="grid min-h-[320px] place-items-center rounded-[22px] border border-dashed border-(--border-soft) bg-(--surface-base)">
+                  <div className="text-center">
+                    <p className="m-0 text-lg text-(--text-main)">Loading note...</p>
+                    <p className="mt-2 mb-0 text-sm text-(--text-muted)">
+                      Fetching the selected note body.
+                    </p>
+                  </div>
+                </div>
               ) : pdfDocument ? (
                 <iframe
                   className="h-full min-h-full w-full border-0"

@@ -26,11 +26,6 @@ import {
   type TreeNodeKind,
 } from "@/lib/tree-repository";
 
-type UploadFeedback = {
-  type: "success" | "error";
-  message: string;
-};
-
 export type TreeAddAction = "folder" | "note" | "upload";
 export type TreeMenuAction = "add" | "delete" | "generate-notes";
 export type TreeSelectionMode = "single" | "toggle" | "range";
@@ -51,8 +46,6 @@ type LeftPaneProps = {
   selectedNodeId: string | null;
   classLabel: string;
   sessions: string[];
-  uploadFeedback: UploadFeedback | null;
-  isUploadingPdf: boolean;
   onSelectNode: (nodeId: string, options: SelectTreeNodeOptions) => void;
   onCreateFolder: () => void;
   onAddAction: (nodeId: string, action: TreeAddAction) => void;
@@ -291,8 +284,6 @@ export function LeftPane({
   selectedNodeId,
   classLabel,
   sessions,
-  uploadFeedback,
-  isUploadingPdf,
   onSelectNode,
   onCreateFolder,
   onAddAction,
@@ -700,23 +691,6 @@ export function LeftPane({
         </div>
 
         <div className='min-h-0 flex-1 overflow-auto py-3'>
-          {uploadFeedback ? (
-            <p
-              className={`mx-3 mb-3 rounded-xl border px-3 py-2 text-xs ${
-                uploadFeedback.type === "error"
-                  ? "border-(--border-accent) bg-(--surface-accent-soft) text-(--text-secondary)"
-                  : "border-(--border-soft) bg-(--surface-main-soft) text-(--main)"
-              }`}
-            >
-              {uploadFeedback.message}
-            </p>
-          ) : null}
-          {isUploadingPdf ? (
-            <p className='mx-3 mb-2 text-xs text-(--text-muted)'>
-              Uploading PDF…
-            </p>
-          ) : null}
-
           <div>{rootNode ? renderNode(rootNode, 0) : null}</div>
         </div>
       </section>

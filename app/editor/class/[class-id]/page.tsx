@@ -35,13 +35,15 @@ export default async function EditorClassPage({
 }: EditorClassPageProps) {
   const { "class-id": requestedClassId } = await params;
   const { classId, usedFallback } = resolveSeed(requestedClassId);
-  const storageBucket = process.env.SUPABASE_STORAGE_BUCKET ?? null;
+  const pdfStorageBucket = process.env.SUPABASE_STORAGE_BUCKET ?? null;
+  const imageStorageBucket = process.env.SUPABASE_IMAGE_STORAGE_BUCKET ?? "uploaded-images";
 
   return (
     <WorkspaceShell
       classId={classId}
+      imageStorageBucket={imageStorageBucket}
+      pdfStorageBucket={pdfStorageBucket}
       requestedClassId={requestedClassId}
-      storageBucket={storageBucket}
       usedFallback={usedFallback}
     />
   );

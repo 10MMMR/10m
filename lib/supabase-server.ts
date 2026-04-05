@@ -14,8 +14,12 @@ function getSupabaseServerConfig() {
   };
 }
 
-export function getSupabaseStorageBucket() {
+export function getSupabasePdfStorageBucket() {
   return process.env.SUPABASE_STORAGE_BUCKET ?? null;
+}
+
+export function getSupabaseImageStorageBucket() {
+  return process.env.SUPABASE_IMAGE_STORAGE_BUCKET ?? "uploaded-images";
 }
 
 export function createSupabaseServerClient(accessToken: string) {

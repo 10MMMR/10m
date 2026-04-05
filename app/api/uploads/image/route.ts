@@ -5,6 +5,12 @@ import {
   createSupabaseServerClient,
   getSupabaseImageStorageBucket,
 } from "@/lib/supabase-server";
+import { API_RATE_LIMITS } from "@/lib/api/rate-limit-rules";
+import {
+  consumeRateLimit,
+  createRateLimitResponse,
+  getRateLimitIdentity,
+} from "@/lib/api/rate-limit";
 
 const NODE_ID_PATTERN = /^[a-z0-9:_-]+$/i;
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
@@ -133,6 +139,18 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: authResult.error },
       { status: authResult.status },
+    );
+  }
+
+  const rateLimit = await consumeRateLimit({
+    config: API_RATE_LIMITS.uploadsImagePost,
+    identity: getRateLimitIdentity(request, authResult.user.id),
+  });
+
+  if (!rateLimit.allowed) {
+    return createRateLimitResponse(
+      rateLimit,
+      "Too many image uploads. Please wait before retrying.",
     );
   }
 

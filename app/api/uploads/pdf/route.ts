@@ -11,6 +11,12 @@ import {
   createSupabaseServerClient,
   getSupabasePdfStorageBucket,
 } from "@/lib/supabase-server";
+import { API_RATE_LIMITS } from "@/lib/api/rate-limit-rules";
+import {
+  consumeRateLimit,
+  createRateLimitResponse,
+  getRateLimitIdentity,
+} from "@/lib/api/rate-limit";
 
 const MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024;
 const NODE_ID_PATTERN = /^[a-z0-9:_-]+$/i;
@@ -169,6 +175,18 @@ export async function POST(request: Request) {
     );
   }
 
+  const postRateLimit = await consumeRateLimit({
+    config: API_RATE_LIMITS.uploadsPdfPost,
+    identity: getRateLimitIdentity(request, authResult.user.id),
+  });
+
+  if (!postRateLimit.allowed) {
+    return createRateLimitResponse(
+      postRateLimit,
+      "Too many PDF uploads. Please wait before retrying.",
+    );
+  }
+
   const bucket = getSupabasePdfStorageBucket();
 
   if (!bucket) {
@@ -285,6 +303,18 @@ export async function DELETE(request: Request) {
     return NextResponse.json(
       { error: authResult.error },
       { status: authResult.status },
+    );
+  }
+
+  const deleteRateLimit = await consumeRateLimit({
+    config: API_RATE_LIMITS.uploadsPdfDelete,
+    identity: getRateLimitIdentity(request, authResult.user.id),
+  });
+
+  if (!deleteRateLimit.allowed) {
+    return createRateLimitResponse(
+      deleteRateLimit,
+      "Too many delete requests. Please wait before retrying.",
     );
   }
 

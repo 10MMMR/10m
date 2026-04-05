@@ -7,6 +7,7 @@ AI-assisted study workspace built with Next.js, Supabase, Tiptap, and Gemini.
 - [Overview](#overview)
 - [Stack](#stack)
 - [AI Overview](#ai-overview)
+- [Rate Limiting](#rate-limiting)
 - [AI Action Registry](#ai-action-registry)
 - [Chat Flow](#chat-flow)
 - [Note Generation Flow](#note-generation-flow)
@@ -55,6 +56,47 @@ The shared AI layer lives in `lib/ai/` and is responsible for:
 - assistant command parsing
 - note document validation
 - authenticated source-context loading from Supabase
+
+## Rate Limiting
+
+API rate limiting is centralized in:
+
+- `lib/api/rate-limit.ts`
+- `lib/api/rate-limit-rules.ts`
+
+How it works:
+
+- Fixed-window limiter keyed by route + caller identity.
+- Identity is `user:{userId}` when authenticated, otherwise `ip:{forwarded-or-real-ip}`.
+- Each protected route consumes from its configured limit before running core logic.
+- Storage backend:
+  - if `REDIS_URL` is configured, counters are stored in Redis (shared across instances)
+  - otherwise, counters fall back to in-memory (single-instance scope)
+- The client reads `Retry-After` and `X-RateLimit-*` headers and applies per-action cooldown messaging (chat, note generation, PDF/image upload, and PDF delete).
+- Limit violations return `429` with:
+  - `Retry-After`
+  - `X-RateLimit-Limit`
+  - `X-RateLimit-Remaining`
+  - `X-RateLimit-Reset`
+
+Current route rules (`windowMs = 60_000`):
+
+- `POST /api/chat`: `2` requests/window
+- `POST /api/notes/generate`: `20` requests/window
+- `POST /api/uploads/image`: `20` requests/window
+- `POST /api/uploads/pdf`: `12` requests/window
+- `DELETE /api/uploads/pdf`: `30` requests/window
+- `POST /api/editor/log-invalid-document`: `8` requests/window
+
+`/api/editor/log-invalid-document` has additional protection:
+
+- Auth is required.
+- When over limit, the route returns `202` with `{ ok: true, sampled: true }` and skips `console.error` emission to reduce log noise.
+
+Operational note:
+
+- Redis mode is recommended for production so limits are global across replicas.
+- In-memory mode is process-local and only safe for local dev or single-instance deploys.
 
 ## AI Action Registry
 
@@ -362,6 +404,9 @@ Optional AI environment variables:
   - defaults to `gemini`
 - `AI_REQUIRE_AUTH`
   - parsed by config today, but current AI routes still always require authenticated Supabase users
+- `REDIS_URL`
+  - Redis connection string used by API rate limiting.
+  - Example format: `redis://default:<password>@<host>:<port>` or `rediss://default:<password>@<host>:<port>` depending on your Redis Cloud endpoint.
 
 Supabase-related environment variables used by the AI and storage flows:
 
@@ -403,3 +448,7 @@ npm test
   - auth, validation, note loading, PDF loading, and draft context merging
 - `lib/ai/providers/gemini.ts`
   - Gemini request builder and text generation call
+- `lib/api/rate-limit.ts`
+  - centralized rate-limit backend (Redis + in-memory fallback), identity strategy, and headers
+- `lib/api/rate-limit-rules.ts`
+  - per-route rate-limit configuration

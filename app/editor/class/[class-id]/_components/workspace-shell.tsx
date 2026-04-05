@@ -27,7 +27,6 @@ import {
   serializeNoteDocumentForComparison,
   type NoteDocument,
 } from "@/lib/note-document";
-import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import {
   clearTreeUiState,
@@ -427,7 +426,6 @@ export function WorkspaceShell({
   usedFallback,
 }: WorkspaceShellProps) {
   const workspace = getWorkspaceSeed(classId);
-  // const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const treeRepository = useRef<SupabaseTreeRepository | null>(
     supabase ? new SupabaseTreeRepository(supabase) : null,
   );

@@ -6,11 +6,19 @@ import {
   noteDocumentToPlainText,
   type NoteDocument,
 } from "@/lib/note-document";
-import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { moveNodeInTree, type TreeNode } from "@/lib/tree-repository";
 
-jest.mock("@/lib/supabase-browser", () => ({
-  getSupabaseBrowserClient: jest.fn(),
+var mockSupabaseClient: unknown = null;
+
+jest.mock("../../../../_global/authentication/supabaseClient", () => ({
+  get supabase() {
+    return mockSupabaseClient;
+  },
+}));
+
+jest.mock("../../../../_global/authentication/authentication", () => ({
+  handleGoogleSignIn: jest.fn(),
+  handleSignOut: jest.fn(),
 }));
 
 jest.mock("./topbar", () => ({
@@ -574,7 +582,7 @@ describe("WorkspaceShell note flow", () => {
       email: "student@example.com",
       id: "user-123",
     });
-    jest.mocked(getSupabaseBrowserClient).mockReturnValue(fakeSupabase as never);
+    mockSupabaseClient = fakeSupabase;
     uploadShouldFailAfterStorage = false;
     deleteShouldFailAfterTree = false;
     chatShouldFail = false;
@@ -1452,7 +1460,7 @@ describe("WorkspaceShell note flow", () => {
 
   test("shows a clear message and no tree when signed out", async () => {
     fakeSupabase = createFakeSupabaseClient(null);
-    jest.mocked(getSupabaseBrowserClient).mockReturnValue(fakeSupabase as never);
+    mockSupabaseClient = fakeSupabase;
 
     renderWorkspace();
 
@@ -1527,7 +1535,7 @@ describe("WorkspaceShell note flow", () => {
         user_id: "user-123",
       },
     );
-    jest.mocked(getSupabaseBrowserClient).mockReturnValue(fakeSupabase as never);
+    mockSupabaseClient = fakeSupabase;
     window.localStorage.setItem(
       "editor-tree-ui-state:user-123:cs101-ai",
       JSON.stringify({

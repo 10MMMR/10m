@@ -561,6 +561,9 @@ describe("WorkspaceShell note flow", () => {
   let deleteShouldFailAfterTree = false;
   let chatShouldFail = false;
   let noteGenerationShouldFail = false;
+  let noteGenerationRateLimited = false;
+  let noteGenerationRetryAfterSeconds = 0;
+  let noteGenerationGate: Promise<void> | null = null;
   let nextAssistantCommand: AssistantCommand = {
     action: "reply",
     message: "Structured reply",
@@ -590,6 +593,9 @@ describe("WorkspaceShell note flow", () => {
     deleteShouldFailAfterTree = false;
     chatShouldFail = false;
     noteGenerationShouldFail = false;
+    noteGenerationRateLimited = false;
+    noteGenerationRetryAfterSeconds = 0;
+    noteGenerationGate = null;
     nextAssistantCommand = {
       action: "reply",
       message: "Structured reply",
@@ -619,19 +625,64 @@ describe("WorkspaceShell note flow", () => {
       if (input === "/api/notes/generate") {
         lastGenerateBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
 
+        if (noteGenerationGate) {
+          await noteGenerationGate;
+        }
+
+        if (noteGenerationRateLimited) {
+          return {
+            headers: {
+              get: (name: string) => {
+                const lower = name.toLowerCase();
+
+                if (lower === "retry-after") {
+                  return String(noteGenerationRetryAfterSeconds || 12);
+                }
+
+                if (lower === "x-ratelimit-limit") {
+                  return "2";
+                }
+
+                if (lower === "x-ratelimit-remaining") {
+                  return "0";
+                }
+
+                if (lower === "x-ratelimit-reset") {
+                  return String(
+                    Math.ceil(Date.now() / 1000) + (noteGenerationRetryAfterSeconds || 12),
+                  );
+                }
+
+                return null;
+              },
+            },
+            json: async () => ({ error: "Too many note-generation requests. Please try again shortly." }),
+            ok: false,
+            status: 429,
+          } as Response;
+        }
+
         if (noteGenerationShouldFail) {
           return {
+            headers: {
+              get: () => null,
+            },
             json: async () => ({ error: "Unable to generate note." }),
             ok: false,
+            status: 500,
           } as Response;
         }
 
         return {
+          headers: {
+            get: () => null,
+          },
           json: async () => ({
             contentJson: nextGeneratedContentJson,
             ...(nextGeneratedTitle ? { title: nextGeneratedTitle } : {}),
           }),
           ok: true,
+          status: 200,
         } as Response;
       }
 
@@ -1313,6 +1364,71 @@ describe("WorkspaceShell note flow", () => {
       sourceNodeIds: [sourceNoteId],
       title: "AI Study Sheet",
     });
+  });
+
+  test("does not show assistant generation confirmation before note generation completes", async () => {
+    renderWorkspace();
+
+    await createRootNote();
+
+    nextAssistantCommand = {
+      action: "generate_note",
+      message: "Creating a fresh study note.",
+      prompt: "Create sharp study notes from the current note.",
+      target: "new_note",
+      title: "AI Study Sheet",
+    };
+
+    let releaseGeneration: (() => void) | null = null;
+    noteGenerationGate = new Promise<void>((resolve) => {
+      releaseGeneration = resolve;
+    });
+
+    await sendChatMessage("Make a new study note from this");
+
+    expect(screen.getByTestId("chat-messages")).not.toHaveTextContent(
+      "assistant:Creating a fresh study note.",
+    );
+
+    await act(async () => {
+      releaseGeneration?.();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-messages")).toHaveTextContent(
+        "assistant:Creating a fresh study note.",
+      );
+    });
+  });
+
+  test("posts rate-limit feedback in chat and popup when chat-triggered note generation is limited", async () => {
+    renderWorkspace();
+
+    await createRootNote();
+
+    nextAssistantCommand = {
+      action: "generate_note",
+      message: "Creating a fresh study note.",
+      prompt: "Create sharp study notes from the current note.",
+      target: "new_note",
+      title: "AI Study Sheet",
+    };
+    noteGenerationRateLimited = true;
+    noteGenerationRetryAfterSeconds = 12;
+
+    await sendChatMessage("Make a new study note from this");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-messages")).toHaveTextContent(
+        "assistant:Too many note-generation requests. Please try again shortly. Try again in 12s.",
+      );
+    });
+    expect(screen.getByTestId("chat-messages")).not.toHaveTextContent(
+      "assistant:Creating a fresh study note.",
+    );
+    expect(screen.getByTestId("workspace-feedback")).toHaveTextContent(
+      "Too many note-generation requests. Please try again shortly. Try again in 12s.",
+    );
   });
 
   test("overwrites the current note when chat returns generate_note with current_note target", async () => {

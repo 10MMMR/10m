@@ -627,7 +627,7 @@ export function WorkspaceShell({
     } = await supabase.auth.getSession();
 
     return session?.access_token ?? null;
-  }, [supabase]);
+  }, []);
 
   const syncSelectionState = useCallback(
     (
@@ -910,7 +910,7 @@ export function WorkspaceShell({
     );
 
     return () => subscription.unsubscribe();
-  }, [supabase]);
+  }, []);
 
   useEffect(() => {
     if (authStatus !== "signed-in" || !authUser) {
@@ -1020,7 +1020,7 @@ export function WorkspaceShell({
     return () => {
       cancelled = true;
     };
-  }, [pdfStorageBucket, selectedFileNode, supabase]);
+  }, [pdfStorageBucket, selectedFileNode]);
 
   useEffect(() => {
     draftNoteImageStoragePathsRef.current = draftNoteImageStoragePaths;
@@ -1095,7 +1095,6 @@ export function WorkspaceShell({
     draftNoteId,
     draftNoteImageStoragePathKey,
     imageStorageBucket,
-    supabase,
   ]);
 
   const handleHideChat = () => {

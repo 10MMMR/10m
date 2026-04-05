@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ComponentType, type SVGProps } from "react";
+import { useAuth } from "@/app/_global/authentication/auth-context";
 import { SiteLogo } from "@/app/_components/site-logo";
 import { ThemeTogglePill } from "@/app/_components/theme-toggle-pill";
 import { ChatPopupToggle } from "./chat-popup-toggle";
@@ -57,6 +58,7 @@ const sidebarItems: SidebarItem[] = [
 
 export function AppShell({ children }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const { signOut } = useAuth();
   const pathname = usePathname();
   const sidebarWidth = collapsed
     ? `${SIDEBAR_VISIBLE_REM}rem`
@@ -128,7 +130,7 @@ export function AppShell({ children }: AppShellProps) {
             style={{ bottom: "1.2rem" }}
           >
             <ThemeTogglePill placement='inline' />
-            <SidebarProfile name='Tan Yu' />
+            <SidebarProfile name='Tan Yu' onSignOut={signOut} />
           </div>
         </div>
       </aside>

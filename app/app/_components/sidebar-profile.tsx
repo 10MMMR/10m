@@ -18,6 +18,7 @@ import {
 
 type SidebarProfileProps = {
   name: string;
+  onSignOut: () => void;
 };
 
 type ProfileAction = {
@@ -49,7 +50,7 @@ const profileActions: ProfileAction[] = [
   },
 ];
 
-export function SidebarProfile({ name }: SidebarProfileProps) {
+export function SidebarProfile({ name, onSignOut }: SidebarProfileProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -86,7 +87,13 @@ export function SidebarProfile({ name }: SidebarProfileProps) {
               <button
                 key={action.id}
                 className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-semibold text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)"
-                onClick={() => setMenuOpen(false)}
+                onClick={() => {
+                  if (action.id === "logout") {
+                    onSignOut();
+                  }
+
+                  setMenuOpen(false);
+                }}
                 type="button"
               >
                 <Icon className="h-4 w-4 text-(--text-muted)" aria-hidden="true" />

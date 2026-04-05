@@ -1,18 +1,218 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
+import { AuthCheckLoadingScreen } from "../_global/authentication/auth-check-loading-screen";
+import { useAuth } from "../_global/authentication/auth-context";
+import { SignedInAuthPanel } from "../_global/authentication/signed-in-auth-panel";
+import { supabase } from "../_global/authentication/supabaseClient";
+
+function isEmailNotConfirmed(message: string | undefined) {
+  return (message ?? "").toLowerCase().includes("email not confirmed");
+}
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpEmail, setOtpEmail] = useState("");
+  const [otpError, setOtpError] = useState("");
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+  const [isRedirectingToDashboard, setIsRedirectingToDashboard] = useState(false);
+  const { isAuthenticated, signInWithGoogle, signOut, status, user } = useAuth();
 
-  const canSubmit = Boolean(email && password);
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const canSubmit = Boolean(email && password) && !isSubmitting;
+  const redirectToDashboard = () => {
+    setIsRedirectingToDashboard(true);
+    router.replace("/app");
   };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (isSubmitting) {
+      return;
+    }
+
+    if (!supabase) {
+      setAuthError("Authentication Failed");
+      return;
+    }
+
+    setAuthError("");
+    setIsSubmitting(true);
+
+    try {
+      const normalizedEmail = email.trim();
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
+
+      if (error) {
+        if (isEmailNotConfirmed(error.message)) {
+          const { error: otpSendError } = await supabase.auth.signInWithOtp({
+            email: normalizedEmail,
+            options: {
+              shouldCreateUser: false,
+            },
+          });
+
+          if (otpSendError) {
+            setAuthError("Authentication Failed");
+            return;
+          }
+
+          setOtpEmail(normalizedEmail);
+          setOtpCode("");
+          setOtpError("");
+          return;
+        }
+
+        setAuthError("Authentication Failed");
+        return;
+      }
+
+      if (!data.user?.email_confirmed_at) {
+        const { error: otpSendError } = await supabase.auth.signInWithOtp({
+          email: normalizedEmail,
+          options: {
+            shouldCreateUser: false,
+          },
+        });
+
+        if (otpSendError) {
+          setAuthError("Authentication Failed");
+          return;
+        }
+
+        setOtpEmail(normalizedEmail);
+        setOtpCode("");
+        setOtpError("");
+        return;
+      }
+
+      redirectToDashboard();
+    } catch {
+      setAuthError("Authentication Failed");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleVerifyOtp = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!otpEmail || !supabase || isVerifyingOtp) {
+      return;
+    }
+
+    const normalizedCode = otpCode.trim();
+
+    if (!normalizedCode) {
+      setOtpError("Authentication Failed");
+      return;
+    }
+
+    setIsVerifyingOtp(true);
+    setOtpError("");
+
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: otpEmail,
+        token: normalizedCode,
+        type: "email",
+      });
+
+      if (error || !data.session) {
+        setOtpError("Authentication Failed");
+        return;
+      }
+
+      redirectToDashboard();
+    } catch {
+      setOtpError("Authentication Failed");
+    } finally {
+      setIsVerifyingOtp(false);
+    }
+  };
+
+  if (status === "loading") {
+    return <AuthCheckLoadingScreen />;
+  }
+
+  if (isRedirectingToDashboard) {
+    return (
+      <main className="flex h-[100dvh] items-center justify-center px-4 py-14 sm:px-6">
+        <section className="organic-card w-full max-w-xl rounded-4xl p-6 text-center sm:p-9">
+          <p className="mono-label text-xs font-semibold uppercase tracking-[0.14em] text-(--text-muted)">
+            Authentication
+          </p>
+          <div
+            className="mx-auto mt-6 h-14 w-14 animate-spin rounded-full border-4 border-(--border-soft) border-t-(--main)"
+            aria-hidden="true"
+          />
+          <p className="mt-4 text-sm font-semibold text-(--text-muted)">
+            Taking you to your dashboard...
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  if (isAuthenticated && user) {
+    return <SignedInAuthPanel onSignOut={signOut} user={user} />;
+  }
+
+  if (otpEmail) {
+    return (
+      <main className="flex h-[100dvh] items-center justify-center px-4 py-14 sm:px-6">
+        <section className="organic-card w-full max-w-xl rounded-4xl p-6 sm:p-9">
+          <p className="mono-label text-xs font-semibold uppercase tracking-[0.14em] text-(--text-muted)">
+            Verify Email
+          </p>
+          <h1 className="display-font mt-3 text-4xl font-bold text-(--text-main)">
+            Enter one-time passcode
+          </h1>
+          <p className="mt-3 text-(--text-muted)">
+            We sent a one-time passcode to{" "}
+            <span className="font-semibold text-(--text-main)">{otpEmail}</span>.
+          </p>
+
+          <form className="mt-6 space-y-4" onSubmit={handleVerifyOtp} noValidate>
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-(--text-main)" htmlFor="login-otp">
+                One-time passcode
+              </label>
+              <input
+                id="login-otp"
+                className="organic-input"
+                name="otp"
+                type="text"
+                value={otpCode}
+                onChange={(event) => setOtpCode(event.target.value)}
+              />
+            </div>
+
+            {otpError ? <p className="text-sm text-(--destructive)">{otpError}</p> : null}
+
+            <button
+              disabled={isVerifyingOtp}
+              className="organic-button organic-button-primary mt-1 min-h-12 w-full disabled:pointer-events-none disabled:opacity-60"
+              type="submit"
+            >
+              {isVerifyingOtp ? "Verifying..." : "Verify and continue"}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="flex h-[100dvh] items-center justify-center px-4 py-14 sm:px-6">
@@ -22,12 +222,14 @@ export default function LoginPage() {
         </p>
         <h1 className="display-font mt-3 text-4xl font-bold text-(--text-main)">Log in</h1>
         <p className="mt-3 text-(--text-muted)">
-          Enter your details to access your account. Submit is intentionally inactive for now.
+          Enter your details to access your account.
         </p>
 
         <button
           className="mt-6 inline-flex min-h-12 w-full items-center justify-center gap-3 rounded-full border border-(--border-soft) bg-(--surface-panel) px-5 py-3 font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-soft)"
           type="button"
+          onClick={signInWithGoogle}
+          disabled={status === "unavailable"}
         >
           <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-(--border-soft) bg-(--surface-base) text-sm font-bold text-(--main)">
             G
@@ -89,8 +291,10 @@ export default function LoginPage() {
             className="organic-button organic-button-primary mt-1 min-h-12 w-full disabled:pointer-events-none disabled:opacity-60"
             type="submit"
           >
-            Submit
+            {isSubmitting ? "Signing in..." : "Submit"}
           </button>
+
+          {authError ? <p className="text-sm text-(--destructive)">{authError}</p> : null}
         </form>
 
         <p className="mt-6 text-sm text-(--text-muted)">

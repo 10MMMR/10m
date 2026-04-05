@@ -8,11 +8,13 @@ import {
 } from "@/lib/note-document";
 import { moveNodeInTree, type TreeNode } from "@/lib/tree-repository";
 
-var mockSupabaseClient: unknown = null;
+const getMockSupabaseClient = () =>
+  (globalThis as typeof globalThis & { __mockSupabaseClient?: unknown })
+    .__mockSupabaseClient ?? null;
 
 jest.mock("../../../../_global/authentication/supabaseClient", () => ({
   get supabase() {
-    return mockSupabaseClient;
+    return getMockSupabaseClient();
   },
 }));
 
@@ -582,7 +584,8 @@ describe("WorkspaceShell note flow", () => {
       email: "student@example.com",
       id: "user-123",
     });
-    mockSupabaseClient = fakeSupabase;
+    (globalThis as typeof globalThis & { __mockSupabaseClient?: unknown }).__mockSupabaseClient =
+      fakeSupabase;
     uploadShouldFailAfterStorage = false;
     deleteShouldFailAfterTree = false;
     chatShouldFail = false;
@@ -1460,7 +1463,8 @@ describe("WorkspaceShell note flow", () => {
 
   test("shows a clear message and no tree when signed out", async () => {
     fakeSupabase = createFakeSupabaseClient(null);
-    mockSupabaseClient = fakeSupabase;
+    (globalThis as typeof globalThis & { __mockSupabaseClient?: unknown }).__mockSupabaseClient =
+      fakeSupabase;
 
     renderWorkspace();
 
@@ -1535,7 +1539,8 @@ describe("WorkspaceShell note flow", () => {
         user_id: "user-123",
       },
     );
-    mockSupabaseClient = fakeSupabase;
+    (globalThis as typeof globalThis & { __mockSupabaseClient?: unknown }).__mockSupabaseClient =
+      fakeSupabase;
     window.localStorage.setItem(
       "editor-tree-ui-state:user-123:cs101-ai",
       JSON.stringify({

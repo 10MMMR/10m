@@ -414,6 +414,54 @@ Response format:
 
 Use pnpm instead of npm
 
+## Branch Change Description Rules
+
+When I ask for a "description of the changes on this branch" (or similar), do not output a shallow file-summary list.
+
+Start with a **TL;DR** section at the very top, then provide the detailed change bullets.
+The TL;DR must include **one summary bullet per detailed bullet**, in the same order, so each detailed item has a matching quick summary.
+
+Generate a concise bullet list that explains, for each meaningful change:
+
+1. What was missing or broken before
+2. What the change aims to accomplish
+3. How it works now (new flow/logic path)
+
+### Required style
+
+- Put **TL;DR** first, before all detailed bullets.
+- TL;DR must be a mapped list: one concise summary bullet for each detailed bullet below.
+- Keep TL;DR bullets shorter than their matching detailed bullets.
+- Use bullets only (no long paragraphs).
+- Be specific and implementation-aware, but concise.
+- Group related changes by behavior/subsystem, not by file dump.
+- Prefer "before -> after -> flow" framing.
+- If a change is a bug fix/patch, explicitly name the gap/regression it fixes.
+- If a change is a feature, describe the user/system flow introduced.
+- Mention risk-reduction or correctness impact when relevant.
+- Avoid generic statements like "improved performance" unless the mechanism is explained.
+
+### Avoid
+
+- Don't just list files changed.
+- Don't only say "added X" without purpose and behavior.
+- Don't use marketing language.
+- Don't speculate about intent not supported by the code.
+
+### Output template (default)
+
+- **TL;DR**
+  - [summary for detailed bullet 1]
+  - [summary for detailed bullet 2]
+  - [summary for detailed bullet 3]
+  - [...]
+
+- **[Area/Behavior]**: [what was missing/problem].
+  - **Goal**: [what this change is trying to achieve].
+  - **How**: [new logic/flow in practical terms].
+
+If I ask for "short" or "concise", keep it high-signal but still preserve the "problem -> goal -> how" structure.
+
 # Future Expansion
 
 This document will evolve as the project grows.

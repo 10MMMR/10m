@@ -18,6 +18,12 @@ import {
   type DraftNoteContext,
 } from "@/lib/ai/server-context";
 import { getAiConfig } from "@/lib/ai/config";
+import { API_RATE_LIMITS } from "@/lib/api/rate-limit-rules";
+import {
+  consumeRateLimit,
+  createRateLimitResponse,
+  getRateLimitIdentity,
+} from "@/lib/api/rate-limit";
 
 type GenerateNotesRequestBody = {
   classId?: unknown;
@@ -89,6 +95,18 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: authResult.error },
       { status: authResult.status },
+    );
+  }
+
+  const rateLimit = await consumeRateLimit({
+    config: API_RATE_LIMITS.notesGeneratePost,
+    identity: getRateLimitIdentity(request, authResult.user.id),
+  });
+
+  if (!rateLimit.allowed) {
+    return createRateLimitResponse(
+      rateLimit,
+      "Too many note-generation requests. Please try again shortly.",
     );
   }
 

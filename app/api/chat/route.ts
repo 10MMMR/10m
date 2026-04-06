@@ -16,6 +16,12 @@ import {
 } from "@/lib/ai/server-context";
 import type { ChatMessage } from "@/lib/ai/types";
 import { getAiConfig } from "@/lib/ai/config";
+import { API_RATE_LIMITS } from "@/lib/api/rate-limit-rules";
+import {
+  consumeRateLimit,
+  createRateLimitResponse,
+  getRateLimitIdentity,
+} from "@/lib/api/rate-limit";
 
 type ChatRequestBody = {
   activeNodeId?: unknown;
@@ -100,6 +106,18 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: authResult.error },
       { status: authResult.status },
+    );
+  }
+
+  const rateLimit = await consumeRateLimit({
+    config: API_RATE_LIMITS.chatPost,
+    identity: getRateLimitIdentity(request, authResult.user.id),
+  });
+
+  if (!rateLimit.allowed) {
+    return createRateLimitResponse(
+      rateLimit,
+      "Too many chat requests. Please try again shortly.",
     );
   }
 

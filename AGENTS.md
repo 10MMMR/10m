@@ -137,6 +137,16 @@ Follow typical Next.js patterns:
 
 ---
 
+# API Rate Limiting Rules
+
+For any new endpoint under `app/api`, rate limiting is required by default.
+
+- Add a dedicated entry in `lib/api/rate-limit-rules.ts`.
+- Apply it in the endpoint handler via `consumeRateLimit(...)` and `getRateLimitIdentity(...)`.
+- Ask the developer what rate they want (`limit` and `windowMs`) before implementing the endpoint rate-limit rule.
+
+---
+
 # Editing Behavior
 
 Agents should:

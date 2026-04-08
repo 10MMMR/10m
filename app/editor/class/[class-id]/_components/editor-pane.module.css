@@ -19,6 +19,17 @@
   max-width: 100%;
 }
 
+.noteBodyEditor :global(.tiptap .inline-image-placeholder) {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 1rem;
+  background: var(--surface-panel-soft);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
 .noteBodyEditor :global(.tiptap .inline-image-asset) {
   display: block;
   width: 100%;
@@ -27,9 +38,26 @@
   border: 1px solid var(--border-soft);
   border-radius: 1rem;
   background: var(--surface-base);
+  opacity: 1;
+  transition: opacity 150ms ease;
+}
+
+.noteBodyEditor :global(.tiptap .inline-image-node[data-image-loading="true"][data-aspect-ratio] .inline-image-placeholder) {
+  opacity: 1;
+}
+
+.noteBodyEditor :global(.tiptap .inline-image-node[data-image-loading="true"][data-aspect-ratio] .inline-image-asset) {
+  opacity: 0;
 }
 
 .noteBodyEditor :global(.tiptap .inline-image-node.ProseMirror-selectednode .inline-image-asset) {
+  border-color: var(--border-floating);
+  box-shadow:
+    0 0 0 2px var(--surface-base),
+    0 0 0 4px var(--border-floating);
+}
+
+.noteBodyEditor :global(.tiptap .inline-image-node.ProseMirror-selectednode .inline-image-placeholder) {
   border-color: var(--border-floating);
   box-shadow:
     0 0 0 2px var(--surface-base),

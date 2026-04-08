@@ -112,11 +112,17 @@ type ToolbarAction =
 
 type UploadedImage = {
   alt?: string | null;
+  aspectRatio?: number | null;
   mimeType?: string | null;
   src: string;
   storagePath?: string | null;
   title?: string | null;
   width?: number | null;
+};
+
+type UploadedImageMetadata = {
+  aspectRatio: number | null;
+  width: number | null;
 };
 
 type TableAction =
@@ -269,6 +275,42 @@ type EditorSelectionRange = {
 const IMAGE_UPLOAD_ACCEPT =
   ".jpg,.jpeg,.png,.gif,.webp,.svg,.heic,image/jpeg,image/png,image/gif,image/webp,image/svg+xml,image/heic,image/heic-sequence";
 
+function readUploadedImageMetadata(file: File): Promise<UploadedImageMetadata> {
+  return new Promise((resolve) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+
+    const resolveWith = (metadata: UploadedImageMetadata) => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(metadata);
+    };
+
+    image.onload = () => {
+      if (!image.naturalWidth || !image.naturalHeight) {
+        resolveWith({
+          aspectRatio: null,
+          width: null,
+        });
+        return;
+      }
+
+      resolveWith({
+        aspectRatio: image.naturalWidth / image.naturalHeight,
+        width: image.naturalWidth,
+      });
+    };
+
+    image.onerror = () => {
+      resolveWith({
+        aspectRatio: null,
+        width: null,
+      });
+    };
+
+    image.src = objectUrl;
+  });
+}
+
 function getBlockAttribute(editor: EditorInstance, attribute: "lineHeight" | "textAlign") {
   const paragraphValue = editor.getAttributes("paragraph")[attribute];
 
@@ -389,6 +431,8 @@ export function EditorPane({
   const [equationSession, setEquationSession] = useState<EquationSession | null>(null);
   const [editorRevision, setEditorRevision] = useState(0);
   const canEdit = Boolean(note) && !lockIn && !isNoteLoading;
+  const isDesktopToolbarMenuOpen =
+    isTableMenuOpen || isAlignMenuOpen || isLineSpacingMenuOpen;
   const noteDocument = note?.contentJson ?? EMPTY_NOTE_DOCUMENT;
   const serializedNoteDocument = serializeNoteDocumentForComparison(noteDocument);
   const hasActiveEquationField = Boolean(activeEquationId) && canEdit;
@@ -766,6 +810,7 @@ export function EditorPane({
       .insertContent({
         attrs: {
           alt: uploadedImage.alt ?? uploadedImage.title ?? "Uploaded image",
+          aspectRatio: uploadedImage.aspectRatio ?? null,
           mimeType: uploadedImage.mimeType ?? null,
           src: uploadedImage.src,
           storagePath: uploadedImage.storagePath ?? null,
@@ -797,8 +842,15 @@ export function EditorPane({
     setImageUploadError(null);
 
     try {
-      const uploadedImage = await onUploadImage(file, noteId);
-      insertUploadedImage(uploadedImage);
+      const [uploadedImage, metadata] = await Promise.all([
+        onUploadImage(file, noteId),
+        readUploadedImageMetadata(file),
+      ]);
+      insertUploadedImage({
+        ...uploadedImage,
+        aspectRatio: uploadedImage.aspectRatio ?? metadata.aspectRatio,
+        width: uploadedImage.width ?? metadata.width,
+      });
       setIsImageModalOpen(false);
       setIsImageDropActive(false);
       imageSelectionRef.current = null;
@@ -1213,6 +1265,22 @@ export function EditorPane({
     setIsOverflowLineSpacingMenuOpen(false);
   };
 
+  const handleDesktopTableMenuFocus = () => {
+    setIsAlignMenuOpen(false);
+    setIsLineSpacingMenuOpen(false);
+    setIsTableMenuOpen(true);
+  };
+
+  const handleDesktopTableMenuBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget as Node | null;
+
+    if (nextTarget && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+
+    setIsTableMenuOpen(false);
+  };
+
   const toggleDesktopMenu = (
     setter: Dispatch<SetStateAction<boolean>>,
   ) => {
@@ -1539,7 +1607,9 @@ export function EditorPane({
         >
           <div
             className={`flex max-w-full items-center gap-1 rounded-[20px] bg-(--surface-toolbar-float) px-3 py-2 shadow-(--shadow-floating) backdrop-blur-lg [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
-              useCompactToolbar ? "overflow-visible" : "overflow-x-auto"
+              useCompactToolbar || isDesktopToolbarMenuOpen
+                ? "overflow-visible"
+                : "overflow-x-auto"
             }`}
           >
             <button
@@ -1676,6 +1746,9 @@ export function EditorPane({
             <div
               className={`relative ${useCompactToolbar ? "hidden" : "block"}`}
               data-editor-table-menu
+              onBlur={handleDesktopTableMenuBlur}
+              onFocus={handleDesktopTableMenuFocus}
+              onMouseEnter={handleDesktopTableMenuFocus}
             >
               <button
                 className="flex h-11 items-center gap-1.5 rounded-xl border border-transparent px-3 text-[15px] text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-soft)"
@@ -1683,6 +1756,7 @@ export function EditorPane({
                 aria-label="Table"
                 aria-expanded={isTableMenuOpen}
                 onClick={() => toggleDesktopMenu(setIsTableMenuOpen)}
+                onFocus={handleDesktopTableMenuFocus}
               >
                 <span>Table</span>
                 <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />

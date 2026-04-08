@@ -532,6 +532,10 @@ function isValidNode(value: unknown, options: ValidationOptions): value is NoteD
 
       if (
         (!isAbsent(attrs.alt) && typeof attrs.alt !== "string") ||
+        (!isAbsent(attrs.aspectRatio) &&
+          (typeof attrs.aspectRatio !== "number" ||
+            !Number.isFinite(attrs.aspectRatio) ||
+            attrs.aspectRatio <= 0)) ||
         (!isAbsent(attrs.title) && typeof attrs.title !== "string") ||
         (!isAbsent(attrs.mimeType) && typeof attrs.mimeType !== "string") ||
         (!isAbsent(attrs.storagePath) && typeof attrs.storagePath !== "string") ||
@@ -543,6 +547,7 @@ function isValidNode(value: unknown, options: ValidationOptions): value is NoteD
 
       return Object.keys(attrs).every((key) =>
         key === "alt" ||
+        key === "aspectRatio" ||
         key === "mimeType" ||
         key === "src" ||
         key === "storagePath" ||

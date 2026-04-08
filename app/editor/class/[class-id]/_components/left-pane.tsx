@@ -11,6 +11,7 @@ import {
   FolderIcon,
   PlusIcon,
 } from "@heroicons/react/24/outline";
+import Link from "next/link";
 import {
   useEffect,
   useMemo,
@@ -238,21 +239,6 @@ function RowActions({
             </button>
             <button
               className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors duration-150 ${
-                canDelete
-                  ? "text-(--text-main) hover:bg-(--surface-main-faint)"
-                  : "cursor-not-allowed text-(--text-muted) opacity-50"
-              }`}
-              disabled={!canDelete}
-              onClick={() => {
-                onMenuAction(node.id, "delete");
-                onCloseMenus();
-              }}
-              type='button'
-            >
-              Delete
-            </button>
-            <button
-              className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors duration-150 ${
                 canGenerateNotes
                   ? "text-(--text-main) hover:bg-(--surface-main-faint)"
                   : "cursor-not-allowed text-(--text-muted) opacity-50"
@@ -265,6 +251,21 @@ function RowActions({
               type='button'
             >
               Generate notes
+            </button>
+            <button
+              className={`w-full rounded-lg px-2 py-1.5 text-left text-xs transition-colors duration-150 ${
+                canDelete
+                  ? "text-(--destructive) hover:bg-(--surface-main-faint)"
+                  : "cursor-not-allowed text-(--text-muted) opacity-50"
+              }`}
+              disabled={!canDelete}
+              onClick={() => {
+                onMenuAction(node.id, "delete");
+                onCloseMenus();
+              }}
+              type='button'
+            >
+              Delete
             </button>
           </div>
         ) : null}
@@ -665,9 +666,13 @@ export function LeftPane({
     <aside ref={asideRef} className={asideClass}>
       <section className='flex min-h-0 flex-1 flex-col'>
         <div className='flex items-center gap-3 border-b border-(--border-soft) p-3'>
-          <div className='grid h-9 w-9 place-items-center rounded-xl bg-(--surface-main-soft) text-[13px] font-bold text-(--main)'>
-            N
-          </div>
+          <Link
+            aria-label='Go to app dashboard'
+            className='grid h-9 w-9 place-items-center rounded-full bg-(--main) text-[10px] font-extrabold text-(--text-contrast) transition-opacity duration-150 hover:opacity-90'
+            href='/app'
+          >
+            10M
+          </Link>
           <div className='flex-1'>
             <h2 className='m-0'>Notes</h2>
           </div>

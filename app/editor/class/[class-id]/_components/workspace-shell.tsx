@@ -18,7 +18,6 @@ import {
   type TreeAddAction,
   type TreeMenuAction,
 } from "./left-pane";
-import { Topbar } from "./topbar";
 import { getWorkspaceSeed, type Message } from "../_lib/workspace-data";
 import type { AssistantCommand } from "@/lib/ai/assistant-contract";
 import {
@@ -54,8 +53,6 @@ import {
 import { FloatingPopupBanner } from "@/app/_components/floating-popup-banner";
 
 import { supabase } from "../../../../_global/authentication/supabaseClient";
-import { handleGoogleSignIn } from "../../../../_global/authentication/authentication";
-import { handleSignOut } from "../../../../_global/authentication/authentication";
 
 const MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024;
 const PDF_SIGNED_URL_TTL_SECONDS = 60 * 60;
@@ -66,8 +63,6 @@ type WorkspaceShellProps = {
   classId: string;
   imageStorageBucket: string | null;
   pdfStorageBucket: string | null;
-  requestedClassId: string;
-  usedFallback: boolean;
 };
 
 type UploadFeedback = {
@@ -435,8 +430,6 @@ export function WorkspaceShell({
   classId,
   imageStorageBucket,
   pdfStorageBucket,
-  requestedClassId,
-  usedFallback,
 }: WorkspaceShellProps) {
   const workspace = getWorkspaceSeed(classId);
   const treeRepository = useRef<SupabaseTreeRepository | null>(
@@ -1780,11 +1773,7 @@ export function WorkspaceShell({
   const handlePrepareRowMenu = (nodeId: string) => {
     if (selectedNodeIds.includes(nodeId)) {
       setSelectionAnchorId(nodeId);
-      return;
     }
-
-    syncSelectionState(treeNodes, [nodeId], nodeId);
-    setSelectionAnchorId(nodeId);
   };
 
   const handleMoveNode = (
@@ -2024,6 +2013,7 @@ export function WorkspaceShell({
 
       return {
         alt: payload.fileName ?? file.name,
+        aspectRatio: null,
         mimeType: payload.mimeType ?? file.type ?? null,
         src: payload.signedUrl,
         storagePath: payload.storagePath,
@@ -2283,14 +2273,6 @@ export function WorkspaceShell({
     }
   };
 
-  const authLabel =
-    authStatus === "loading"
-      ? "Checking auth..."
-      : authStatus === "unavailable"
-        ? "Supabase unavailable"
-        : authStatus === "signed-in"
-          ? authUser?.email || authUser?.id || "Signed in"
-          : "Continue with Google";
   const chatCooldownSeconds = getRemainingCooldown("chat");
   const isChatRateLimited = chatCooldownSeconds > 0;
   const isChatDisabled = !activeAiContextId || isChatRateLimited;
@@ -2321,19 +2303,6 @@ export function WorkspaceShell({
 
   return (
     <main className='workspace-shell flex h-screen flex-col overflow-hidden'>
-      <Topbar
-        classId={classId}
-        requestedClassId={requestedClassId}
-        usedFallback={usedFallback}
-        workspaceName={workspace.workspaceName}
-        classLabel={workspace.classLabel}
-        lockIn={lockIn}
-        isAuthReady={authStatus !== "loading" && authStatus !== "unavailable"}
-        isSignedIn={authStatus === "signed-in"}
-        authLabel={authLabel}
-        onSignIn={handleGoogleSignIn}
-        onSignOut={handleSignOut}
-      />
       <FloatingPopupBanner
         autoDismissMs={floatingPopupAutoDismissMs}
         message={floatingPopupMessage}

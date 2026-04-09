@@ -13,7 +13,7 @@ export const API_RATE_LIMITS = {
   },
   notesGeneratePost: {
     key: "api:notes:generate:post",
-    limit: 1,
+    limit: 5,
     windowMs: 60_000,
   },
   uploadsImagePost: {

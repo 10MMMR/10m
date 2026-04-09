@@ -17,7 +17,7 @@ const BLOCK_NODES = new Set([
 ]);
 const INLINE_NODES = new Set(["text", "equationBlock", "image", "inlineImage"]);
 const FULL_NODE_TYPES = new Set([...BLOCK_NODES, ...INLINE_NODES]);
-const AI_NODE_TYPES = new Set([...BLOCK_NODES, "text"]);
+const AI_NODE_TYPES = new Set([...BLOCK_NODES, "text", "image", "inlineImage"]);
 const FULL_MARK_TYPES = new Set(["bold", "highlight", "italic", "textStyle", "underline"]);
 const AI_MARK_TYPES = new Set(["bold", "highlight", "italic", "underline"]);
 const HEADING_LEVELS = new Set([1, 2, 3]);
@@ -77,6 +77,48 @@ export const AI_NOTE_DOCUMENT_JSON_SCHEMA = {
       },
       required: ["type"],
     },
+    imageNode: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        type: {
+          enum: ["image", "inlineImage"],
+        },
+        attrs: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            alt: {
+              type: "string",
+            },
+            aspectRatio: {
+              type: "number",
+              exclusiveMinimum: 0,
+            },
+            mimeType: {
+              type: "string",
+            },
+            src: {
+              type: "string",
+              minLength: 1,
+            },
+            storagePath: {
+              type: "string",
+            },
+            title: {
+              type: "string",
+            },
+            width: {
+              type: "integer",
+              minimum: 96,
+              maximum: 1600,
+            },
+          },
+          required: ["src"],
+        },
+      },
+      required: ["type", "attrs"],
+    },
     inlineNode: {
       anyOf: [
         {
@@ -84,6 +126,9 @@ export const AI_NOTE_DOCUMENT_JSON_SCHEMA = {
         },
         {
           $ref: "#/$defs/hardBreakNode",
+        },
+        {
+          $ref: "#/$defs/imageNode",
         },
       ],
     },
@@ -532,6 +577,10 @@ function isValidNode(value: unknown, options: ValidationOptions): value is NoteD
 
       if (
         (!isAbsent(attrs.alt) && typeof attrs.alt !== "string") ||
+        (!isAbsent(attrs.aspectRatio) &&
+          (typeof attrs.aspectRatio !== "number" ||
+            !Number.isFinite(attrs.aspectRatio) ||
+            attrs.aspectRatio <= 0)) ||
         (!isAbsent(attrs.title) && typeof attrs.title !== "string") ||
         (!isAbsent(attrs.mimeType) && typeof attrs.mimeType !== "string") ||
         (!isAbsent(attrs.storagePath) && typeof attrs.storagePath !== "string") ||
@@ -543,6 +592,7 @@ function isValidNode(value: unknown, options: ValidationOptions): value is NoteD
 
       return Object.keys(attrs).every((key) =>
         key === "alt" ||
+        key === "aspectRatio" ||
         key === "mimeType" ||
         key === "src" ||
         key === "storagePath" ||

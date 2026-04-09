@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { WorkspaceShell } from "./workspace-shell";
 import type { AssistantCommand } from "@/lib/ai/assistant-contract";
 import {
@@ -185,6 +185,19 @@ type NoteRow = {
   user_id: string;
 };
 
+type NoteSessionRow = {
+  class_id: string;
+  created_at: string;
+  id: string;
+  note_node_id: string;
+  note_titles: string[] | null;
+  pdf_titles: string[] | null;
+  title: string;
+  unit_titles: string[] | null;
+  updated_at: string;
+  user_id: string;
+};
+
 function createParagraphDocument(text: string): NoteDocument {
   return {
     type: "doc",
@@ -220,11 +233,13 @@ class FakeTableQuery<Row extends Record<string, unknown>> {
   private readonly equals = new Map<string, string>();
   private inFilter: { field: string; values: string[] } | null = null;
   private orderField: string | null = null;
+  private orderAscending = true;
 
   constructor(
     private readonly rows: Row[],
     private readonly mode: "select" | "delete",
     private readonly columns?: string,
+    private readonly forcedError: { message: string } | null = null,
     private readonly onExecute?: (details: {
       columns?: string;
       equals: Record<string, string>;
@@ -242,12 +257,17 @@ class FakeTableQuery<Row extends Record<string, unknown>> {
     return this;
   }
 
-  order(field: string) {
+  order(field: string, options?: { ascending?: boolean }) {
     this.orderField = field;
+    this.orderAscending = options?.ascending ?? true;
     return this;
   }
 
   private execute() {
+    if (this.forcedError) {
+      return { data: null, error: this.forcedError };
+    }
+
     this.onExecute?.({
       columns: this.columns,
       equals: Object.fromEntries(this.equals.entries()),
@@ -272,7 +292,13 @@ class FakeTableQuery<Row extends Record<string, unknown>> {
       filteredRows = [...filteredRows].sort((left, right) => {
         const leftValue = left[orderField];
         const rightValue = right[orderField];
-        return Number(leftValue) - Number(rightValue);
+        const leftNumber = Number(leftValue);
+        const rightNumber = Number(rightValue);
+        const numericResult =
+          Number.isFinite(leftNumber) && Number.isFinite(rightNumber)
+            ? leftNumber - rightNumber
+            : String(leftValue ?? "").localeCompare(String(rightValue ?? ""));
+        return this.orderAscending ? numericResult : -numericResult;
       });
     }
 
@@ -301,7 +327,7 @@ class FakeTableQuery<Row extends Record<string, unknown>> {
 
     return {
       data: filteredRows.map((row) =>
-        Object.fromEntries(selectedFields.map((field) => [field, row[field as keyof TreeRow]])),
+        Object.fromEntries(selectedFields.map((field) => [field, row[field as keyof Row]])),
       ),
       error: null,
     };
@@ -338,6 +364,8 @@ function createFakeSupabaseClient(user: SessionUser | null) {
       ]
     : [];
   const noteRows: NoteRow[] = [];
+  const noteSessionRows: NoteSessionRow[] = [];
+  let sessionTableUnavailable = false;
   const uploadedFiles = new Map<string, File>();
   const removedPaths: string[][] = [];
   const signedUrlCalls: string[] = [];
@@ -379,6 +407,12 @@ function createFakeSupabaseClient(user: SessionUser | null) {
     remove,
     upload,
   };
+  const missingSessionTableError = Object.assign(
+    new Error('relation "editor_note_sessions" does not exist'),
+    {
+      code: "42P01",
+    },
+  );
   let authStateChangeCallback:
     | ((event: string, session: { user: SessionUser } | null) => void)
     | null = null;
@@ -440,7 +474,7 @@ function createFakeSupabaseClient(user: SessionUser | null) {
       if (table === "editor_notes") {
         return {
           select: (columns: string) =>
-            new FakeTableQuery(noteRows, "select", columns, (details) => {
+            new FakeTableQuery(noteRows, "select", columns, null, (details) => {
               noteSelectCalls.push(details);
             }),
           upsert: async (rows: Omit<NoteRow, "user_id">[]) => {
@@ -467,12 +501,86 @@ function createFakeSupabaseClient(user: SessionUser | null) {
         };
       }
 
+      if (table === "editor_note_sessions") {
+        if (sessionTableUnavailable) {
+          return {
+            select: (columns: string) =>
+              new FakeTableQuery(
+                noteSessionRows,
+                "select",
+                columns,
+                missingSessionTableError,
+              ),
+            upsert: () => ({
+              select: () => ({
+                single: async () => ({
+                  data: null,
+                  error: missingSessionTableError,
+                }),
+              }),
+            }),
+            delete: () =>
+              new FakeTableQuery(
+                noteSessionRows,
+                "delete",
+                undefined,
+                missingSessionTableError,
+              ),
+          };
+        }
+
+        return {
+          select: (columns: string) => new FakeTableQuery(noteSessionRows, "select", columns),
+          upsert: (
+            row: Omit<NoteSessionRow, "user_id">,
+            _options?: { onConflict?: string },
+          ) => {
+            const fullRow: NoteSessionRow = {
+              ...row,
+              user_id: user?.id ?? "anonymous",
+            };
+            const existingIndex = noteSessionRows.findIndex(
+              (candidate) =>
+                candidate.user_id === fullRow.user_id &&
+                candidate.class_id === fullRow.class_id &&
+                candidate.note_node_id === fullRow.note_node_id,
+            );
+
+            if (existingIndex >= 0) {
+              noteSessionRows[existingIndex] = fullRow;
+            } else {
+              noteSessionRows.push(fullRow);
+            }
+
+            return {
+              select: (columns: string) => ({
+                single: async () => {
+                  const selectedFields = columns
+                    .split(",")
+                    .map((field) => field.trim())
+                    .filter(Boolean);
+
+                  return {
+                    data: Object.fromEntries(
+                      selectedFields.map((field) => [field, fullRow[field as keyof NoteSessionRow]]),
+                    ),
+                    error: null,
+                  };
+                },
+              }),
+            };
+          },
+          delete: () => new FakeTableQuery(noteSessionRows, "delete"),
+        };
+      }
+
       throw new Error(`Unexpected table: ${table}`);
     }),
     storage: {
       from: jest.fn().mockImplementation(() => storageApi),
     },
     __noteRows: noteRows,
+    __noteSessionRows: noteSessionRows,
     __treeRows: treeRows,
     __uploadedFiles: uploadedFiles,
     __removedPaths: removedPaths,
@@ -480,6 +588,9 @@ function createFakeSupabaseClient(user: SessionUser | null) {
     __signedUrlCalls: signedUrlCalls,
     __emitAuthStateChange: (event: string, nextUser: SessionUser | null) => {
       authStateChangeCallback?.(event, nextUser ? { user: nextUser } : null);
+    },
+    __setSessionTableUnavailable: (nextValue: boolean) => {
+      sessionTableUnavailable = nextValue;
     },
   };
 }
@@ -550,6 +661,14 @@ function seedTree(
   tree: TreeNode[],
 ) {
   applyTree(fakeSupabase, tree);
+}
+
+function seedSessions(
+  fakeSupabase: ReturnType<typeof createFakeSupabaseClient>,
+  sessions: NoteSessionRow[],
+) {
+  fakeSupabase.__noteSessionRows.splice(0, fakeSupabase.__noteSessionRows.length);
+  fakeSupabase.__noteSessionRows.push(...sessions);
 }
 
 describe("WorkspaceShell note flow", () => {
@@ -827,8 +946,6 @@ describe("WorkspaceShell note flow", () => {
         classId={classId}
         imageStorageBucket="uploaded-images"
         pdfStorageBucket="uploaded-pdfs"
-        requestedClassId={classId}
-        usedFallback={false}
       />,
     );
 
@@ -1364,6 +1481,22 @@ describe("WorkspaceShell note flow", () => {
       sourceNodeIds: [sourceNoteId],
       title: "AI Study Sheet",
     });
+    const generatedNoteNodeId = screen.getByTestId("draft-id").textContent;
+    expect(generatedNoteNodeId).toBeTruthy();
+    expect(fakeSupabase.__noteSessionRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          class_id: "cs101-ai",
+          note_node_id: generatedNoteNodeId,
+          note_titles: ["Untitled note"],
+          pdf_titles: [],
+          title: "AI Study Sheet",
+          unit_titles: [],
+          user_id: "user-123",
+        }),
+      ]),
+    );
+    expect(screen.getAllByRole("button", { name: "AI Study Sheet" })).toHaveLength(1);
   });
 
   test("does not show assistant generation confirmation before note generation completes", async () => {
@@ -1405,6 +1538,7 @@ describe("WorkspaceShell note flow", () => {
     renderWorkspace();
 
     await createRootNote();
+    const noteRowsBefore = fakeSupabase.__treeRows.filter((row) => row.kind === "note").length;
 
     nextAssistantCommand = {
       action: "generate_note",
@@ -1428,6 +1562,9 @@ describe("WorkspaceShell note flow", () => {
     );
     expect(screen.getByTestId("workspace-feedback")).toHaveTextContent(
       "Too many note-generation requests. Please try again shortly. Try again in 12s.",
+    );
+    expect(fakeSupabase.__treeRows.filter((row) => row.kind === "note")).toHaveLength(
+      noteRowsBefore,
     );
   });
 
@@ -1577,6 +1714,230 @@ describe("WorkspaceShell note flow", () => {
     });
   });
 
+  test("deleting a session removes only the session and re-exposes the linked note in the tree", async () => {
+    seedTree(fakeSupabase, [
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "root:cs101-ai",
+        kind: "root",
+        order: 0,
+        parentId: null,
+        title: "cs101-ai",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        contentJson: createParagraphDocument("Session body"),
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "session-note-node",
+        kind: "note",
+        noteId: "session-note-id",
+        order: 1,
+        parentId: "root:cs101-ai",
+        title: "Session note",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+    ]);
+    seedSessions(fakeSupabase, [
+      {
+        class_id: "cs101-ai",
+        created_at: "2026-04-01T00:00:00.000Z",
+        id: "session-1",
+        note_node_id: "session-note-node",
+        note_titles: ["Session note"],
+        pdf_titles: [],
+        title: "Session note",
+        unit_titles: [],
+        updated_at: "2026-04-01T00:00:01.000Z",
+        user_id: "user-123",
+      },
+    ]);
+    renderWorkspace();
+
+    expect(await screen.findByRole("button", { name: "Session note" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Open menu" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open session menu" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(fakeSupabase.__noteSessionRows).toHaveLength(0);
+    });
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Open menu" })).toHaveLength(2);
+    });
+    expect(fakeSupabase.__treeRows.find((row) => row.id === "session-note-node")).toBeDefined();
+  });
+
+  test("moving a session note into the tree removes the session and keeps the note persisted", async () => {
+    seedTree(fakeSupabase, [
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "root:cs101-ai",
+        kind: "root",
+        order: 0,
+        parentId: null,
+        title: "cs101-ai",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "folder-1",
+        kind: "folder",
+        order: 1,
+        parentId: "root:cs101-ai",
+        title: "Folder 1",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        contentJson: createParagraphDocument("Session body"),
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "session-note-node",
+        kind: "note",
+        noteId: "session-note-id",
+        order: 2,
+        parentId: "root:cs101-ai",
+        title: "Session note",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+    ]);
+    seedSessions(fakeSupabase, [
+      {
+        class_id: "cs101-ai",
+        created_at: "2026-04-01T00:00:00.000Z",
+        id: "session-1",
+        note_node_id: "session-note-node",
+        note_titles: ["Session note"],
+        pdf_titles: [],
+        title: "Session note",
+        unit_titles: [],
+        updated_at: "2026-04-01T00:00:01.000Z",
+        user_id: "user-123",
+      },
+    ]);
+    renderWorkspace();
+
+    const sessionButton = await screen.findByRole("button", { name: "Session note" });
+    const folderLabel = await screen.findByText("Folder 1");
+    const folderDropTarget = folderLabel.closest('div[draggable="true"]') as HTMLDivElement;
+    expect(folderDropTarget).toBeTruthy();
+
+    fireEvent.dragStart(sessionButton);
+    fireEvent.dragOver(folderDropTarget, { clientY: 9999 });
+    fireEvent.drop(folderDropTarget, { clientY: 9999 });
+    fireEvent.dragEnd(sessionButton);
+
+    await waitFor(() => {
+      expect(fakeSupabase.__noteSessionRows).toHaveLength(0);
+    });
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Open menu" }).length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.queryByRole("button", { name: "Open session menu" })).not.toBeInTheDocument();
+    expect(fakeSupabase.__treeRows.find((row) => row.id === "session-note-node")).toBeDefined();
+  });
+
+  test("blocks new-note generation when session storage is unavailable", async () => {
+    renderWorkspace();
+    await createRootNote();
+    fakeSupabase.__setSessionTableUnavailable(true);
+
+    const openMenuButtons = screen.getAllByRole("button", { name: "Open menu" });
+    await act(async () => {
+      fireEvent.click(openMenuButtons[openMenuButtons.length - 1]);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Generate notes" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workspace-feedback")).toHaveTextContent(
+        "Session storage is unavailable. Run the latest migrations before generating notes.",
+      );
+    });
+    expect(fakeSupabase.__noteSessionRows).toHaveLength(0);
+  });
+
+  test("folder-driven generation uses descendant sources and stores selected folder title as unit context", async () => {
+    seedTree(fakeSupabase, [
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "root:cs101-ai",
+        kind: "root",
+        order: 0,
+        parentId: null,
+        title: "cs101-ai",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "folder-1",
+        kind: "folder",
+        order: 1,
+        parentId: "root:cs101-ai",
+        title: "Unit 1",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        contentJson: createParagraphDocument("Chapter note body"),
+        createdAt: "2026-04-01T00:00:00.000Z",
+        id: "note-node-1",
+        kind: "note",
+        noteId: "note-1",
+        order: 0,
+        parentId: "folder-1",
+        title: "Chapter note",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        classId: "cs101-ai",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        fileMimeType: "application/pdf",
+        fileSize: 2048,
+        fileStoragePath: "user-123/cs101-ai/file-1/lecture.pdf",
+        id: "file-1",
+        kind: "file",
+        order: 1,
+        parentId: "folder-1",
+        title: "lecture.pdf",
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+    ]);
+    renderWorkspace();
+
+    const folderRow = await screen.findByRole("button", { name: /Unit 1/ });
+    fireEvent.click(folderRow);
+
+    const openMenuButtons = screen.getAllByRole("button", { name: "Open menu" });
+    fireEvent.click(openMenuButtons[openMenuButtons.length - 1]);
+    fireEvent.click(await screen.findByRole("button", { name: "Generate notes" }));
+
+    await waitFor(() => {
+      expect(lastGenerateBody).toMatchObject({
+        sourceNodeIds: ["note-node-1", "file-1"],
+      });
+    });
+    await waitFor(() => {
+      expect(fakeSupabase.__noteSessionRows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            note_titles: ["Chapter note"],
+            pdf_titles: ["lecture.pdf"],
+            unit_titles: ["Unit 1"],
+          }),
+        ]),
+      );
+    });
+  });
+
   test("shows a clear message and no tree when signed out", async () => {
     fakeSupabase = createFakeSupabaseClient(null);
     (globalThis as typeof globalThis & { __mockSupabaseClient?: unknown }).__mockSupabaseClient =
@@ -1594,8 +1955,6 @@ describe("WorkspaceShell note flow", () => {
         classId="unknown-class"
         imageStorageBucket="uploaded-images"
         pdfStorageBucket="uploaded-pdfs"
-        requestedClassId="unknown-class"
-        usedFallback={false}
       />,
     );
 

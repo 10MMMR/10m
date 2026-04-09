@@ -18,10 +18,18 @@ import {
   type TreeAddAction,
   type TreeMenuAction,
 } from "./left-pane";
-import { Topbar } from "./topbar";
 import { getWorkspaceSeed, type Message } from "../_lib/workspace-data";
 import type { AssistantCommand } from "@/lib/ai/assistant-contract";
-import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
+import {
+  EMPTY_NOTE_DOCUMENT,
+  parseNoteDocument,
+  serializeNoteDocumentForComparison,
+  type NoteDocument,
+} from "@/lib/note-document";
+import {
+  SupabaseNoteSessionRepository,
+  type NoteSession,
+} from "@/lib/supabase-note-session-repository";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import {
   clearTreeUiState,
@@ -29,6 +37,7 @@ import {
   saveTreeUiState,
 } from "@/lib/tree-ui-state";
 import {
+  canDropNode,
   canParentContainChild,
   createNodeInTree,
   createTreeFolderNode,
@@ -42,8 +51,6 @@ import {
 } from "@/lib/tree-repository";
 
 import { supabase } from "../../../../_global/authentication/supabaseClient";
-import { handleGoogleSignIn } from "../../../../_global/authentication/authentication";
-import { handleSignOut } from "../../../../_global/authentication/authentication";
 
 const MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024;
 const PDF_SIGNED_URL_TTL_SECONDS = 60 * 60;
@@ -52,9 +59,8 @@ const STORAGE_NOT_CONFIGURED_MESSAGE = "Supabase storage is not configured.";
 
 type WorkspaceShellProps = {
   classId: string;
-  requestedClassId: string;
-  storageBucket: string | null;
-  usedFallback: boolean;
+  imageStorageBucket: string | null;
+  pdfStorageBucket: string | null;
 };
 
 type UploadFeedback = {
@@ -65,6 +71,11 @@ type UploadFeedback = {
 type DeleteConfirmationState = {
   directDeleteIds: string[];
   cascadeDeleteIds: string[];
+  message: string;
+};
+
+type SessionDeleteConfirmationState = {
+  sessionId: string;
   message: string;
 };
 
@@ -115,14 +126,113 @@ type GenerateNoteResponse = {
 
 type AuthStatus = "loading" | "signed-out" | "signed-in" | "unavailable";
 
+type GenerationSourceSnapshot = {
+  noteTitles: string[];
+  pdfTitles: string[];
+  unitTitles: string[];
+};
+
 function getSelectableFiles(nodes: TreeNode[], selectedIds: string[]) {
-  const selectedIdSet = new Set(selectedIds);
+  const childrenByParent = new Map<string, TreeNode[]>();
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const sourceIds = new Set<string>();
+
+  nodes.forEach((node) => {
+    if (!node.parentId) {
+      return;
+    }
+
+    const children = childrenByParent.get(node.parentId) ?? [];
+    children.push(node);
+    childrenByParent.set(node.parentId, children);
+  });
+
+  const collectDescendants = (nodeId: string) => {
+    const stack = [...(childrenByParent.get(nodeId) ?? [])];
+
+    while (stack.length > 0) {
+      const node = stack.pop();
+
+      if (!node) {
+        continue;
+      }
+
+      if (node.kind === "note" || node.kind === "file") {
+        sourceIds.add(node.id);
+      }
+
+      const children = childrenByParent.get(node.id);
+
+      if (children?.length) {
+        stack.push(...children);
+      }
+    }
+  };
+
+  selectedIds.forEach((selectedId) => {
+    const node = nodeById.get(selectedId);
+
+    if (!node) {
+      return;
+    }
+
+    if (node.kind === "note" || node.kind === "file") {
+      sourceIds.add(node.id);
+      return;
+    }
+
+    if (node.kind === "folder" || node.kind === "root") {
+      collectDescendants(node.id);
+    }
+  });
 
   return nodes.filter(
     (node) =>
-      selectedIdSet.has(node.id) &&
-      (node.kind === "note" || node.kind === "file"),
+      sourceIds.has(node.id) && (node.kind === "note" || node.kind === "file"),
   );
+}
+
+function buildGenerationSourceSnapshot(
+  nodes: TreeNode[],
+  selectedIds: string[],
+) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const sourceNodes = getSelectableFiles(nodes, selectedIds);
+  const unitTitles: string[] = [];
+  const seenUnitTitles = new Set<string>();
+
+  selectedIds.forEach((selectedId) => {
+    const node = nodeById.get(selectedId);
+
+    if (!node || node.kind !== "folder") {
+      return;
+    }
+
+    const nextTitle = node.title.trim();
+
+    if (!nextTitle || seenUnitTitles.has(nextTitle)) {
+      return;
+    }
+
+    seenUnitTitles.add(nextTitle);
+    unitTitles.push(nextTitle);
+  });
+
+  const noteTitles = sourceNodes
+    .filter((node) => node.kind === "note")
+    .map((node) => node.title);
+  const pdfTitles = sourceNodes
+    .filter((node) => node.kind === "file")
+    .map((node) => node.title);
+
+  return {
+    sourceNodes,
+    snapshot: {
+      noteTitles,
+      pdfTitles,
+      unitTitles,
+    } satisfies GenerationSourceSnapshot,
+  };
 }
 
 function formatMessageTime(date: Date) {
@@ -165,6 +275,148 @@ function buildUpdatedNote(
   };
 }
 
+function createNoteGenerationError({
+  kind,
+  message,
+  retryInSeconds,
+  targetContextId,
+}: {
+  kind: NoteGenerationErrorKind;
+  message: string;
+  retryInSeconds?: number;
+  targetContextId?: string;
+}) {
+  const error = new Error(message) as NoteGenerationError;
+  error.kind = kind;
+  error.retryInSeconds = retryInSeconds;
+  error.targetContextId = targetContextId;
+  return error;
+}
+
+function isNoteGenerationError(value: unknown): value is NoteGenerationError {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const kind = Reflect.get(value, "kind");
+  return kind === "error" || kind === "rate_limited";
+}
+
+function isSessionTableUnavailableError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.message.includes("editor_note_sessions");
+}
+
+function mapNoteDocument(
+  node: NoteDocument,
+  mapper: (node: NoteDocument) => NoteDocument,
+): NoteDocument {
+  const nextNode = mapper(node);
+
+  if (!nextNode.content?.length) {
+    return nextNode;
+  }
+
+  const nextContent = nextNode.content.map((child) =>
+    mapNoteDocument(child, mapper),
+  );
+
+  return {
+    ...nextNode,
+    content: nextContent,
+  };
+}
+
+function collectImageStoragePaths(document: NoteDocument) {
+  const storagePaths = new Set<string>();
+
+  mapNoteDocument(document, (node) => {
+    if (
+      (node.type === "image" || node.type === "inlineImage") &&
+      typeof node.attrs?.storagePath === "string" &&
+      node.attrs.storagePath.length > 0
+    ) {
+      storagePaths.add(node.attrs.storagePath);
+    }
+
+    return node;
+  });
+
+  return Array.from(storagePaths);
+}
+
+function replaceImageSources(
+  document: NoteDocument,
+  signedUrlByPath: Map<string, string>,
+) {
+  let changed = false;
+
+  const nextDocument = mapNoteDocument(document, (node) => {
+    if (node.type !== "image" && node.type !== "inlineImage") {
+      return node;
+    }
+
+    const storagePath = node.attrs?.storagePath;
+
+    if (typeof storagePath !== "string" || storagePath.length === 0) {
+      return node;
+    }
+
+    const nextSrc = signedUrlByPath.get(storagePath);
+
+    if (!nextSrc || node.attrs?.src === nextSrc) {
+      return node;
+    }
+
+    changed = true;
+
+    return {
+      ...node,
+      attrs: {
+        ...node.attrs,
+        src: nextSrc,
+      },
+    };
+  });
+
+  return changed ? nextDocument : document;
+}
+
+function sanitizeImageSourcesForPersistence(document: NoteDocument) {
+  let changed = false;
+
+  const nextDocument = mapNoteDocument(document, (node) => {
+    if (node.type !== "image" && node.type !== "inlineImage") {
+      return node;
+    }
+
+    const storagePath = node.attrs?.storagePath;
+
+    if (typeof storagePath !== "string" || storagePath.length === 0) {
+      return node;
+    }
+
+    if (node.attrs?.src === storagePath) {
+      return node;
+    }
+
+    changed = true;
+
+    return {
+      ...node,
+      attrs: {
+        ...node.attrs,
+        src: storagePath,
+      },
+    };
+  });
+
+  return changed ? nextDocument : document;
+}
+
 function isPdfFile(file: File) {
   const fileName = file.name.toLowerCase();
   return file.type === "application/pdf" || fileName.endsWith(".pdf");
@@ -185,6 +437,88 @@ function collectAncestorIds(nodes: TreeNode[], nodeId: string) {
   }
 
   return expandedAncestorIds;
+}
+
+function collectNodeAndDescendantIds(nodes: TreeNode[], nodeId: string) {
+  const childrenByParent = new Map<string, string[]>();
+
+  nodes.forEach((node) => {
+    if (!node.parentId) {
+      return;
+    }
+
+    const children = childrenByParent.get(node.parentId) ?? [];
+    children.push(node.id);
+    childrenByParent.set(node.parentId, children);
+  });
+
+  const ids = new Set<string>([nodeId]);
+  const stack = [...(childrenByParent.get(nodeId) ?? [])];
+
+  while (stack.length > 0) {
+    const childId = stack.pop();
+
+    if (!childId) {
+      continue;
+    }
+
+    ids.add(childId);
+    const children = childrenByParent.get(childId);
+
+    if (children?.length) {
+      stack.push(...children);
+    }
+  }
+
+  return ids;
+}
+
+function expandSelectionWithDescendants(
+  nodes: TreeNode[],
+  selectedIds: string[],
+) {
+  const childrenByParent = new Map<string, string[]>();
+  const allNodeIds = new Set(nodes.map((node) => node.id));
+  const expandedIds: string[] = [];
+  const seenIds = new Set<string>();
+
+  nodes.forEach((node) => {
+    if (!node.parentId) {
+      return;
+    }
+
+    const children = childrenByParent.get(node.parentId) ?? [];
+    children.push(node.id);
+    childrenByParent.set(node.parentId, children);
+  });
+
+  const appendWithDescendants = (nodeId: string) => {
+    if (!allNodeIds.has(nodeId)) {
+      return;
+    }
+
+    const stack = [nodeId];
+
+    while (stack.length > 0) {
+      const currentId = stack.pop();
+
+      if (!currentId || seenIds.has(currentId)) {
+        continue;
+      }
+
+      seenIds.add(currentId);
+      expandedIds.push(currentId);
+      const children = childrenByParent.get(currentId);
+
+      if (children?.length) {
+        stack.push(...children);
+      }
+    }
+  };
+
+  selectedIds.forEach((nodeId) => appendWithDescendants(nodeId));
+
+  return expandedIds;
 }
 
 function collectCascadeDeleteIds(nodes: TreeNode[], nodeIds: string[]) {
@@ -269,14 +603,16 @@ function buildGenerationFailureHtml(message: string) {
 
 export function WorkspaceShell({
   classId,
-  requestedClassId,
-  storageBucket,
-  usedFallback,
+  imageStorageBucket,
+  pdfStorageBucket,
 }: WorkspaceShellProps) {
   const workspace = getWorkspaceSeed(classId);
   // const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const treeRepository = useRef<SupabaseTreeRepository | null>(
     supabase ? new SupabaseTreeRepository(supabase) : null,
+  );
+  const noteSessionRepository = useRef<SupabaseNoteSessionRepository | null>(
+    supabase ? new SupabaseNoteSessionRepository(supabase) : null,
   );
   const chatAbortControllerRef = useRef<AbortController | null>(null);
   const pdfUploadInputRef = useRef<HTMLInputElement>(null);
@@ -300,6 +636,11 @@ export function WorkspaceShell({
   const [isDirty, setIsDirty] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] =
     useState<DeleteConfirmationState | null>(null);
+  const [sessionDeleteConfirmation, setSessionDeleteConfirmation] =
+    useState<SessionDeleteConfirmationState | null>(null);
+  const [noteSessions, setNoteSessions] = useState<NoteSession[]>([]);
+  const [isSessionStorageAvailable, setIsSessionStorageAvailable] =
+    useState(true);
   const [chatSessions, setChatSessions] = useState<Record<string, Message[]>>(
     {},
   );
@@ -341,6 +682,21 @@ export function WorkspaceShell({
   const rootNode = useMemo(
     () => treeNodes.find((node) => node.kind === "root") ?? null,
     [treeNodes],
+  );
+  const sessionById = useMemo(
+    () => new Map(noteSessions.map((session) => [session.id, session])),
+    [noteSessions],
+  );
+  const sessionNoteNodeIds = useMemo(
+    () => new Set(noteSessions.map((session) => session.noteNodeId)),
+    [noteSessions],
+  );
+  const visibleTreeNodes = useMemo(
+    () =>
+      treeNodes.filter(
+        (node) => !(node.kind === "note" && sessionNoteNodeIds.has(node.id)),
+      ),
+    [sessionNoteNodeIds, treeNodes],
   );
 
   const activeEditorNote = selectedNodeKind === "note" ? draftNoteNode : null;
@@ -386,6 +742,8 @@ export function WorkspaceShell({
 
   const resetWorkspaceState = useCallback(() => {
     setTreeNodes([]);
+    setNoteSessions([]);
+    setIsSessionStorageAvailable(true);
     setSelectedNodeIds([]);
     setSelectedNodeId(null);
     setSelectedNodeKind(null);
@@ -400,15 +758,48 @@ export function WorkspaceShell({
   }, []);
 
   const refreshTree = useCallback(async () => {
-    if (!treeRepository.current || !authUser) {
+    if (
+      !treeRepository.current ||
+      !noteSessionRepository.current ||
+      !authUser
+    ) {
       resetWorkspaceState();
-      return [];
+      return {
+        nodes: [],
+        sessions: [],
+      };
     }
 
-    const nodes = await treeRepository.current.listTreeByClass(classId);
+    const nodesPromise = treeRepository.current.listTreeByClass(classId, {
+      includeNoteContent: false,
+    });
+    const sessionsPromise = noteSessionRepository.current
+      .listByClass(classId)
+      .then((sessions) => ({
+        available: true,
+        sessions,
+      }))
+      .catch((error) => {
+        if (isSessionTableUnavailableError(error)) {
+          return {
+            available: false,
+            sessions: [] as NoteSession[],
+          };
+        }
+
+        throw error;
+      });
+    const [nodes, sessionResult] = await Promise.all([
+      nodesPromise,
+      sessionsPromise,
+    ]);
+    const sessions = sessionResult.sessions;
+
     setTreeNodes(nodes);
+    setIsSessionStorageAvailable(sessionResult.available);
+    setNoteSessions(sessions);
     treeNodesRef.current = nodes;
-    return nodes;
+    return { nodes, sessions };
   }, [authUser, classId, resetWorkspaceState]);
 
   const persistTree = useCallback(
@@ -597,7 +988,7 @@ export function WorkspaceShell({
     setChatSessions({});
     setChatInput("");
     setIsChatStreaming(false);
-  }, [classId, resetWorkspaceState, workspace.messages]);
+  }, [classId, resetWorkspaceState]);
 
   useEffect(() => {
     chatAbortControllerRef.current?.abort();
@@ -780,25 +1171,33 @@ export function WorkspaceShell({
     }
 
     if (options.mode === "single") {
-      syncSelectionState(treeNodes, [node.id], node.id);
+      const nextSelectedIds = expandSelectionWithDescendants(treeNodes, [
+        node.id,
+      ]);
+      syncSelectionState(treeNodes, nextSelectedIds, node.id);
       setSelectionAnchorId(node.id);
       return;
     }
 
     if (options.mode === "toggle") {
       const isSelected = selectedNodeIds.includes(node.id);
+      const nodeTreeIds = collectNodeAndDescendantIds(treeNodes, node.id);
       const nextSelectedIds = isSelected
-        ? selectedNodeIds.filter((id) => id !== node.id)
+        ? selectedNodeIds.filter((id) => !nodeTreeIds.has(id))
         : [...selectedNodeIds, node.id];
+      const expandedSelectedIds = expandSelectionWithDescendants(
+        treeNodes,
+        nextSelectedIds,
+      );
       const nextActiveId = isSelected
         ? selectedNodeId === node.id
-          ? (nextSelectedIds.at(-1) ?? null)
+          ? (expandedSelectedIds.at(-1) ?? null)
           : selectedNodeId
         : selectedNodeId && selectedNodeIds.includes(selectedNodeId)
           ? selectedNodeId
           : node.id;
 
-      syncSelectionState(treeNodes, nextSelectedIds, nextActiveId);
+      syncSelectionState(treeNodes, expandedSelectedIds, nextActiveId);
       setSelectionAnchorId(node.id);
       return;
     }
@@ -815,7 +1214,10 @@ export function WorkspaceShell({
 
     const start = Math.min(anchorIndex, nodeIndex);
     const end = Math.max(anchorIndex, nodeIndex);
-    const nextSelectedIds = options.orderedNodeIds.slice(start, end + 1);
+    const nextSelectedIds = expandSelectionWithDescendants(
+      treeNodes,
+      options.orderedNodeIds.slice(start, end + 1),
+    );
     const nextActiveId =
       selectedNodeId && nextSelectedIds.includes(selectedNodeId)
         ? selectedNodeId
@@ -853,17 +1255,55 @@ export function WorkspaceShell({
     [persistTree, syncSelectionState],
   );
 
-  const setDraftNoteContent = useCallback(
-    (noteId: string, title: string, body: string) => {
-      setDraftNoteNode((current) => {
-        if (!current || current.kind !== "note" || current.id !== noteId) {
-          return current;
+  const upsertNoteSession = useCallback(
+    async ({
+      noteNode,
+      snapshot,
+    }: {
+      noteNode: TreeNode;
+      snapshot: GenerationSourceSnapshot;
+    }) => {
+      if (!noteSessionRepository.current || noteNode.kind !== "note") {
+        return null;
+      }
+
+      let session: NoteSession;
+
+      try {
+        session = await noteSessionRepository.current.upsertByNoteNode({
+          classId,
+          noteNodeId: noteNode.id,
+          noteTitles: snapshot.noteTitles,
+          pdfTitles: snapshot.pdfTitles,
+          title: noteNode.title,
+          unitTitles: snapshot.unitTitles,
+        });
+      } catch (error) {
+        if (isSessionTableUnavailableError(error)) {
+          setIsSessionStorageAvailable(false);
+          throw new Error(
+            "Session storage is unavailable. Run the latest migrations before generating notes.",
+          );
         }
 
-        return buildUpdatedNote(current, { body, title });
+        throw error;
+      }
+
+      setNoteSessions((current) => {
+        const next = [
+          session,
+          ...current.filter((item) => item.id !== session.id),
+        ];
+        return next.sort(
+          (left, right) =>
+            new Date(right.updatedAt).getTime() -
+            new Date(left.updatedAt).getTime(),
+        );
       });
+
+      return session;
     },
-    [],
+    [classId],
   );
 
   const createNoteUnderParent = async (
@@ -1000,6 +1440,7 @@ export function WorkspaceShell({
     chatSeedMessages,
     mode,
     prompt,
+    sourceSnapshot,
     sourceNodes,
     targetNoteId,
     title,
@@ -1007,6 +1448,7 @@ export function WorkspaceShell({
     chatSeedMessages?: Message[];
     mode: "new_note" | "overwrite_note";
     prompt: string;
+    sourceSnapshot: GenerationSourceSnapshot;
     sourceNodes: TreeNode[];
     targetNoteId?: string;
     title?: string;
@@ -1026,36 +1468,38 @@ export function WorkspaceShell({
     }
 
     let effectiveMode = mode;
-    let targetNode =
+    const overwriteTargetNode =
       effectiveMode === "overwrite_note" && targetNoteId
         ? (treeNodesRef.current.find((node) => node.id === targetNoteId) ??
           null)
         : null;
+    let targetContextId = overwriteTargetNode?.id ?? chatContextId;
 
     const fallbackTitle =
-      targetNode?.kind === "note" && !title
-        ? targetNode.title
+      overwriteTargetNode?.kind === "note" && !title
+        ? overwriteTargetNode.title
         : buildGeneratedNoteTitle(sourceNodes, title);
 
-    if (!targetNode || targetNode.kind !== "note") {
+    if (!overwriteTargetNode || overwriteTargetNode.kind !== "note") {
       effectiveMode = "new_note";
-      targetNode = await createNoteUnderParent(rootNode.id, {
-        markDirty: false,
-        title: fallbackTitle,
-      });
-
-      if (!targetNode || targetNode.kind !== "note") {
-        throw new Error("Unable to create a note for AI generation.");
-      }
-
-      if (chatSeedMessages) {
-        setMessagesForContext(targetNode.id, chatSeedMessages);
-      }
     }
 
-    const generatingBody = buildGeneratingNoteHtml();
-    setDraftNoteContent(targetNode.id, fallbackTitle, generatingBody);
-    setIsDirty(false);
+    if (
+      effectiveMode === "new_note" &&
+      (!isSessionStorageAvailable || !noteSessionRepository.current)
+    ) {
+      const message =
+        "Session storage is unavailable. Run the latest migrations before generating notes.";
+      setUploadFeedback({
+        type: "error",
+        message,
+      });
+      throw createNoteGenerationError({
+        kind: "error",
+        message,
+        targetContextId,
+      });
+    }
 
     const response = await fetch("/api/notes/generate", {
       method: "POST",
@@ -1073,7 +1517,12 @@ export function WorkspaceShell({
         mode: effectiveMode,
         prompt,
         sourceNodeIds: sourceNodes.map((node) => node.id),
-        targetNoteId: targetNode.id,
+        targetNoteId:
+          effectiveMode === "overwrite_note" &&
+          overwriteTargetNode &&
+          overwriteTargetNode.kind === "note"
+            ? overwriteTargetNode.id
+            : undefined,
         title: fallbackTitle,
       }),
     });
@@ -1091,13 +1540,49 @@ export function WorkspaceShell({
       throw new Error(errorMessage);
     }
 
+    let targetNode = overwriteTargetNode;
+
+    if (
+      effectiveMode === "new_note" ||
+      !targetNode ||
+      targetNode.kind !== "note"
+    ) {
+      targetNode =
+        (await createNoteUnderParent(rootNode.id, {
+          markDirty: false,
+          title: fallbackTitle,
+        })) ?? null;
+
+      if (!targetNode || targetNode.kind !== "note") {
+        throw createNoteGenerationError({
+          kind: "error",
+          message: "Unable to create a note for AI generation.",
+          targetContextId: chatContextId,
+        });
+      }
+    }
+
+    targetContextId = targetNode.id;
+
     const completedNode = buildUpdatedNote(targetNode, {
       body: payload.html,
       title: payload.title?.trim() || fallbackTitle,
     });
 
-    await persistNoteNode(completedNode);
-    return completedNode;
+    const savedNode = await persistNoteNode(completedNode);
+    const isSessionNote = sessionNoteNodeIds.has(savedNode.id);
+    const shouldUpsertSession =
+      effectiveMode === "new_note" ||
+      (effectiveMode === "overwrite_note" && isSessionNote);
+
+    if (shouldUpsertSession) {
+      await upsertNoteSession({
+        noteNode: savedNode,
+        snapshot: sourceSnapshot,
+      });
+    }
+
+    return savedNode;
   };
 
   const handleMenuAction = async (nodeId: string, action: TreeMenuAction) => {
@@ -1122,10 +1607,8 @@ export function WorkspaceShell({
       const selectedIds = selectedNodeIds.includes(node.id)
         ? selectedNodeIds
         : [node.id];
-      const selectedSources = getSelectableFiles(
-        treeNodesRef.current,
-        selectedIds,
-      );
+      const { sourceNodes: selectedSources, snapshot } =
+        buildGenerationSourceSnapshot(treeNodesRef.current, selectedIds);
 
       if (selectedSources.length === 0) {
         return;
@@ -1136,6 +1619,7 @@ export function WorkspaceShell({
           mode: "new_note",
           prompt:
             "Create a premium-quality study note from the selected sources. Be concise, highly structured, exam-focused, and use tables or lists where they add clarity.",
+          sourceSnapshot: snapshot,
           sourceNodes: selectedSources,
           title: buildGeneratedNoteTitle(selectedSources),
         });
@@ -1286,11 +1770,7 @@ export function WorkspaceShell({
   const handlePrepareRowMenu = (nodeId: string) => {
     if (selectedNodeIds.includes(nodeId)) {
       setSelectionAnchorId(nodeId);
-      return;
     }
-
-    syncSelectionState(treeNodes, [nodeId], nodeId);
-    setSelectionAnchorId(nodeId);
   };
 
   const handleMoveNode = (
@@ -1313,6 +1793,133 @@ export function WorkspaceShell({
           error instanceof Error ? error.message : "Unable to move item.",
       });
     });
+  };
+
+  const handleMoveSessionToTree = (
+    sessionId: string,
+    targetNodeId: string,
+    position: DropPosition,
+  ) => {
+    const session = sessionById.get(sessionId);
+    const sessionRepository = noteSessionRepository.current;
+
+    if (!session || !sessionRepository) {
+      return;
+    }
+
+    const dragNodeId = session.noteNodeId;
+
+    if (
+      !canDropNode(treeNodesRef.current, dragNodeId, targetNodeId, position)
+    ) {
+      return;
+    }
+
+    const nextNodes = moveNodeInTree(
+      treeNodesRef.current,
+      classId,
+      dragNodeId,
+      targetNodeId,
+      position,
+    );
+
+    void persistTree(nextNodes)
+      .then(async (savedNodes) => {
+        if (typeof sessionRepository.deleteById === "function") {
+          await sessionRepository.deleteById({
+            classId,
+            sessionId,
+          });
+        } else if (supabase) {
+          const { error } = await supabase
+            .from("editor_note_sessions")
+            .delete()
+            .eq("class_id", classId)
+            .eq("id", sessionId);
+
+          if (error) {
+            throw error;
+          }
+        } else {
+          throw new Error("Session storage is unavailable.");
+        }
+
+        setNoteSessions((current) =>
+          current.filter((item) => item.id !== sessionId),
+        );
+        syncSelectionState(savedNodes, [dragNodeId], dragNodeId);
+        setSelectionAnchorId(dragNodeId);
+      })
+      .catch((error) => {
+        if (isSessionTableUnavailableError(error)) {
+          setIsSessionStorageAvailable(false);
+        }
+        setUploadFeedback({
+          type: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unable to move session note into tree.",
+        });
+      });
+  };
+
+  const handleRequestDeleteSession = (sessionId: string) => {
+    const session = sessionById.get(sessionId);
+
+    if (!session) {
+      return;
+    }
+
+    setDeleteConfirmation(null);
+    setSessionDeleteConfirmation({
+      sessionId,
+      message: `Delete ${session.title} from Sessions?`,
+    });
+  };
+
+  const handleConfirmDeleteSession = async () => {
+    if (!sessionDeleteConfirmation) {
+      return;
+    }
+
+    const { sessionId } = sessionDeleteConfirmation;
+    const sessionRepository = noteSessionRepository.current;
+    setSessionDeleteConfirmation(null);
+
+    try {
+      if (typeof sessionRepository?.deleteById === "function") {
+        await sessionRepository.deleteById({
+          classId,
+          sessionId,
+        });
+      } else if (supabase) {
+        const { error } = await supabase
+          .from("editor_note_sessions")
+          .delete()
+          .eq("class_id", classId)
+          .eq("id", sessionId);
+
+        if (error) {
+          throw error;
+        }
+      } else {
+        throw new Error("Session storage is unavailable.");
+      }
+
+      setNoteSessions((current) =>
+        current.filter((item) => item.id !== sessionId),
+      );
+    } catch (error) {
+      if (isSessionTableUnavailableError(error)) {
+        setIsSessionStorageAvailable(false);
+      }
+      setUploadFeedback({
+        type: "error",
+        message:
+          error instanceof Error ? error.message : "Unable to delete session.",
+      });
+    }
   };
 
   const handleUploadPdfFile = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -1445,6 +2052,82 @@ export function WorkspaceShell({
       return next;
     });
   };
+
+  const handleUploadImage = useCallback(
+    async (file: File, noteId: string) => {
+      const uploadImageCooldownSeconds = getRemainingCooldown("uploadImage");
+
+      if (uploadImageCooldownSeconds > 0) {
+        throw new Error(
+          `Image upload is temporarily rate limited. Try again in ${formatRetryDelay(uploadImageCooldownSeconds)}.`,
+        );
+      }
+
+      if (!authUser) {
+        throw new Error(AUTH_REQUIRED_MESSAGE);
+      }
+
+      if (!imageStorageBucket) {
+        throw new Error(STORAGE_NOT_CONFIGURED_MESSAGE);
+      }
+
+      const accessToken = await getAccessToken();
+
+      if (!accessToken) {
+        throw new Error(AUTH_REQUIRED_MESSAGE);
+      }
+
+      const formData = new FormData();
+      formData.append("classId", classId);
+      formData.append("noteId", noteId);
+      formData.append("file", file);
+
+      const response = await fetch("/api/uploads/image", {
+        body: formData,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        method: "POST",
+      });
+      const payload = (await response
+        .json()
+        .catch(() => null)) as UploadImageResponse | null;
+      const uploadImageRateLimit = parseRateLimit(
+        response,
+        payload?.error ||
+          "Too many image uploads. Please wait before retrying.",
+      );
+
+      if (uploadImageRateLimit.isRateLimited) {
+        setCooldown("uploadImage", uploadImageRateLimit);
+        throw new Error(
+          `${uploadImageRateLimit.message} Try again in ${formatRetryDelay(uploadImageRateLimit.retryInSeconds)}.`,
+        );
+      }
+
+      if (!response.ok || !payload?.signedUrl || !payload.storagePath) {
+        throw new Error(payload?.error || "Unable to upload image.");
+      }
+
+      return {
+        alt: payload.fileName ?? file.name,
+        aspectRatio: null,
+        mimeType: payload.mimeType ?? file.type ?? null,
+        src: payload.signedUrl,
+        storagePath: payload.storagePath,
+        title: payload.fileName ?? file.name,
+        width: null,
+      };
+    },
+    [
+      authUser,
+      classId,
+      getAccessToken,
+      getRemainingCooldown,
+      imageStorageBucket,
+      setCooldown,
+    ],
+  );
 
   const handleSaveNote = async () => {
     if (!draftNoteNode || draftNoteNode.kind !== "note") {
@@ -1581,9 +2264,10 @@ export function WorkspaceShell({
         return;
       }
 
-      const sourceNodes = getSelectableFiles(treeNodesRef.current, [
-        sourceContextId,
-      ]);
+      const { sourceNodes, snapshot } = buildGenerationSourceSnapshot(
+        treeNodesRef.current,
+        [sourceContextId],
+      );
 
       if (sourceNodes.length === 0) {
         throw new Error("No note or PDF is available for note generation.");
@@ -1606,6 +2290,7 @@ export function WorkspaceShell({
           : [userMessage, assistantMessage],
         mode: shouldOverwriteCurrent ? "overwrite_note" : "new_note",
         prompt: payload.assistant.prompt,
+        sourceSnapshot: snapshot,
         sourceNodes,
         targetNoteId: shouldOverwriteCurrent ? sourceContextId : undefined,
         title: payload.assistant.title,
@@ -1629,29 +2314,74 @@ export function WorkspaceShell({
     }
   };
 
-  const authLabel =
-    authStatus === "loading"
-      ? "Checking auth..."
-      : authStatus === "unavailable"
-        ? "Supabase unavailable"
-        : authStatus === "signed-in"
-          ? authUser?.email || authUser?.id || "Signed in"
-          : "Continue with Google";
+  const chatCooldownSeconds = getRemainingCooldown("chat");
+  const isChatRateLimited = chatCooldownSeconds > 0;
+  const isChatDisabled = !activeAiContextId || isChatRateLimited;
+  const chatDisabledMessage = activeAiContextId
+    ? `Chat is temporarily rate limited. Try again in ${formatRetryDelay(chatCooldownSeconds)}.`
+    : "Open a note or PDF to chat with StudyAI.";
+  const floatingPopupMessage =
+    isUploadingPdf && !isUploadProgressDismissed
+      ? "Uploading PDF..."
+      : (uploadFeedback?.message ?? "");
+  const floatingPopupVariant =
+    isUploadingPdf && !isUploadProgressDismissed
+      ? "info"
+      : uploadFeedback?.type === "success"
+        ? "success"
+        : uploadFeedback?.type === "error"
+          ? "error"
+          : "info";
+  const floatingPopupAutoDismissMs =
+    isUploadingPdf && !isUploadProgressDismissed ? null : 8_000;
+  const handleCloseFloatingPopup = () => {
+    if (isUploadingPdf) {
+      setIsUploadProgressDismissed(true);
+      return;
+    }
+
+    setUploadFeedback(null);
+  };
+
+  const handleSelectSession = (sessionId: string) => {
+    const session = sessionById.get(sessionId);
+
+    if (!session) {
+      return;
+    }
+
+    const targetNode = treeNodesRef.current.find(
+      (node) => node.id === session.noteNodeId && node.kind === "note",
+    );
+
+    if (!targetNode) {
+      return;
+    }
+
+    syncSelectionState(treeNodesRef.current, [targetNode.id], targetNode.id);
+    setSelectionAnchorId(targetNode.id);
+  };
+
+  const handleClearSelectionToActive = () => {
+    if (!selectedNodeId) {
+      syncSelectionState(treeNodesRef.current, [], null);
+      setSelectionAnchorId(null);
+      return;
+    }
+
+    syncSelectionState(treeNodesRef.current, [selectedNodeId], selectedNodeId);
+    setSelectionAnchorId(selectedNodeId);
+  };
 
   return (
     <main className='workspace-shell flex h-screen flex-col overflow-hidden'>
-      <Topbar
-        classId={classId}
-        requestedClassId={requestedClassId}
-        usedFallback={usedFallback}
-        workspaceName={workspace.workspaceName}
-        classLabel={workspace.classLabel}
-        lockIn={lockIn}
-        isAuthReady={authStatus !== "loading" && authStatus !== "unavailable"}
-        isSignedIn={authStatus === "signed-in"}
-        authLabel={authLabel}
-        onSignIn={handleGoogleSignIn}
-        onSignOut={handleSignOut}
+      <FloatingPopupBanner
+        autoDismissMs={floatingPopupAutoDismissMs}
+        message={floatingPopupMessage}
+        onClose={handleCloseFloatingPopup}
+        open={Boolean(floatingPopupMessage)}
+        testId='workspace-feedback'
+        variant={floatingPopupVariant}
       />
       <input
         ref={pdfUploadInputRef}
@@ -1674,23 +2404,27 @@ export function WorkspaceShell({
           key={`left-${classId}`}
           locked={lockIn}
           collapsed={isLeftPaneCollapsed}
+          isLgViewport={isLgViewport}
           onCollapse={() => setIsLeftPaneCollapsed(true)}
           onExpand={() => setIsLeftPaneCollapsed(false)}
-          treeNodes={treeNodes}
+          treeNodes={visibleTreeNodes}
+          allTreeNodesForDrop={treeNodes}
           expandedIds={expandedIds}
           selectedNodeIds={selectedNodeIds}
           selectedNodeId={selectedNodeId}
           classLabel={workspace.classLabel}
-          sessions={workspace.sessions}
-          uploadFeedback={uploadFeedback}
-          isUploadingPdf={isUploadingPdf}
+          sessions={noteSessions}
+          onSelectSession={handleSelectSession}
+          onRequestDeleteSession={handleRequestDeleteSession}
           onSelectNode={handleSelectNode}
+          onClearSelectionToActive={handleClearSelectionToActive}
           onCreateFolder={handleCreateFolder}
           onAddAction={handleAddAction}
           onMenuAction={handleMenuAction}
           onPrepareRowMenu={handlePrepareRowMenu}
           onToggleExpanded={handleToggleExpanded}
           onMoveNode={handleMoveNode}
+          onMoveSessionToTree={handleMoveSessionToTree}
         />
         <EditorPane
           lockIn={lockIn}
@@ -1778,6 +2512,46 @@ export function WorkspaceShell({
               <button
                 className='rounded-full border border-(--destructive) bg-(--destructive) px-5 py-2.5 text-sm font-semibold text-(--destructive-foreground) transition-transform duration-200 hover:-translate-y-0.5'
                 onClick={() => void handleConfirmDelete()}
+                type='button'
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {sessionDeleteConfirmation ? (
+        <div
+          aria-modal='true'
+          className='fixed inset-0 z-50 flex items-center justify-center bg-(--overlay-scrim) p-4 backdrop-blur-sm'
+          onClick={() => setSessionDeleteConfirmation(null)}
+          role='dialog'
+        >
+          <div
+            className='w-full max-w-md rounded-3xl border border-(--border-floating) bg-(--surface-base) p-6 shadow-(--shadow-floating)'
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className='text-xs font-semibold uppercase tracking-widest text-(--text-muted)'>
+              Confirm deletion
+            </p>
+            <h2 className='mt-3 text-2xl font-semibold leading-tight text-(--text-main)'>
+              {sessionDeleteConfirmation.message}
+            </h2>
+            <p className='mt-3 text-sm leading-6 text-(--text-body)'>
+              This removes the session from this list but keeps its linked note
+              in the class tree.
+            </p>
+            <div className='mt-6 flex items-center justify-end gap-3'>
+              <button
+                className='rounded-full border border-(--border-soft) bg-(--surface-input) px-5 py-2.5 text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)'
+                onClick={() => setSessionDeleteConfirmation(null)}
+                type='button'
+              >
+                Cancel
+              </button>
+              <button
+                className='rounded-full border border-(--destructive) bg-(--destructive) px-5 py-2.5 text-sm font-semibold text-(--destructive-foreground) transition-transform duration-200 hover:-translate-y-0.5'
+                onClick={() => void handleConfirmDeleteSession()}
                 type='button'
               >
                 Delete

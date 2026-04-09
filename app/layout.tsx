@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Fraunces, Geist_Mono, Nunito } from "next/font/google";
 import { AuthProvider } from "./_global/authentication/auth-context";
 import { SiteFooter } from "./_components/site-footer";
+import { SiteNavbar } from "./_components/site-navbar";
 import { ThemeTogglePill } from "./_components/theme-toggle-pill";
 import "./globals.css";
 
@@ -67,6 +68,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <AuthProvider>
           <ThemeTogglePill />
+          <SiteNavbar />
           {children}
           <SiteFooter />
         </AuthProvider>

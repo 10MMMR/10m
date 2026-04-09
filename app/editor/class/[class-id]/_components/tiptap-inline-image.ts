@@ -6,6 +6,7 @@ const MAX_IMAGE_WIDTH = 1600;
 
 type InlineImageAttrs = {
   alt?: string | null;
+  aspectRatio?: number | null;
   mimeType?: string | null;
   src: string;
   storagePath?: string | null;
@@ -33,6 +34,14 @@ function getImageWidth(value: unknown) {
   return nextWidth;
 }
 
+function getImageAspectRatio(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return Math.round(value * 1000000) / 1000000;
+}
+
 function applyImageAttributes(image: HTMLImageElement, attrs: InlineImageAttrs) {
   image.src = attrs.src;
   image.alt = attrs.alt ?? "";
@@ -41,8 +50,16 @@ function applyImageAttributes(image: HTMLImageElement, attrs: InlineImageAttrs) 
   image.style.width = "100%";
 }
 
-function applyWrapperWidth(wrapper: HTMLElement, attrs: InlineImageAttrs) {
+function applyWrapperDimensions(wrapper: HTMLElement, attrs: InlineImageAttrs) {
   wrapper.style.width = `${getImageWidth(attrs.width) ?? 320}px`;
+  const aspectRatio = getImageAspectRatio(attrs.aspectRatio);
+
+  if (aspectRatio) {
+    wrapper.style.aspectRatio = String(aspectRatio);
+    return;
+  }
+
+  wrapper.style.removeProperty("aspect-ratio");
 }
 
 function getContainerWidth(image: HTMLImageElement) {
@@ -71,6 +88,29 @@ export const InlineImage = Image.extend({
     return {
       alt: {
         default: null,
+      },
+      aspectRatio: {
+        default: null,
+        parseHTML: (element) => {
+          const aspectRatioValue = element.getAttribute("data-aspect-ratio");
+
+          if (!aspectRatioValue) {
+            return null;
+          }
+
+          return getImageAspectRatio(Number.parseFloat(aspectRatioValue));
+        },
+        renderHTML: (attributes) => {
+          const aspectRatio = getImageAspectRatio(attributes.aspectRatio);
+
+          if (!aspectRatio) {
+            return {};
+          }
+
+          return {
+            "data-aspect-ratio": String(aspectRatio),
+          };
+        },
       },
       mimeType: {
         default: null,
@@ -121,6 +161,9 @@ export const InlineImage = Image.extend({
 
           return {
             alt: image.getAttribute("alt"),
+            aspectRatio: getImageAspectRatio(
+              Number.parseFloat(element.dataset.aspectRatio ?? ""),
+            ),
             mimeType: element.getAttribute("data-mime-type"),
             src: image.getAttribute("src") ?? "",
             storagePath: element.getAttribute("data-storage-path"),
@@ -134,17 +177,22 @@ export const InlineImage = Image.extend({
 
   renderHTML({ HTMLAttributes }) {
     const width = getImageWidth(HTMLAttributes.width) ?? 320;
+    const aspectRatio = getImageAspectRatio(HTMLAttributes.aspectRatio);
+    const style = aspectRatio
+      ? `width: ${width}px; aspect-ratio: ${aspectRatio};`
+      : `width: ${width}px;`;
 
     return [
       "span",
       mergeAttributes(
         {
+          "data-aspect-ratio": aspectRatio ? String(aspectRatio) : undefined,
           "data-inline-image": "true",
           "data-mime-type": HTMLAttributes.mimeType ?? undefined,
           "data-storage-path": HTMLAttributes.storagePath ?? undefined,
           class: "inline-image-node",
           "data-width": String(width),
-          style: `width: ${width}px;`,
+          style,
         },
       ),
       [
@@ -170,22 +218,63 @@ export const InlineImage = Image.extend({
       const image = document.createElement("img");
       image.className = "inline-image-asset";
 
+      const placeholder = document.createElement("span");
+      placeholder.className = "inline-image-placeholder";
+      placeholder.setAttribute("aria-hidden", "true");
+
       const handle = document.createElement("span");
       handle.className = "inline-image-handle";
       handle.tabIndex = editor.isEditable ? 0 : -1;
       handle.setAttribute("aria-hidden", "true");
 
-      wrapper.append(image, handle);
+      wrapper.append(placeholder, image, handle);
 
       let dragSession: DragSession | null = null;
       let currentAttrs = node.attrs as InlineImageAttrs;
       let currentWidth = getImageWidth(node.attrs.width) ?? 320;
 
+      const syncLoadingState = (attrs: InlineImageAttrs) => {
+        if (!getImageAspectRatio(attrs.aspectRatio)) {
+          wrapper.dataset.imageLoading = "false";
+          return;
+        }
+
+        wrapper.dataset.imageLoading =
+          image.complete && image.naturalWidth > 0 ? "false" : "true";
+      };
+
+      const handleImageLoad = () => {
+        if (!getImageAspectRatio(currentAttrs.aspectRatio)) {
+          return;
+        }
+
+        wrapper.dataset.imageLoading = "false";
+      };
+
+      const handleImageError = () => {
+        if (!getImageAspectRatio(currentAttrs.aspectRatio)) {
+          wrapper.dataset.imageLoading = "false";
+          return;
+        }
+
+        wrapper.dataset.imageLoading = "true";
+      };
+
       const syncNode = (attrs: InlineImageAttrs) => {
         currentAttrs = attrs;
         currentWidth = getImageWidth(attrs.width) ?? 320;
         wrapper.dataset.width = String(currentWidth);
-        applyWrapperWidth(wrapper, attrs);
+        applyWrapperDimensions(wrapper, attrs);
+
+        const aspectRatio = getImageAspectRatio(attrs.aspectRatio);
+
+        if (aspectRatio) {
+          wrapper.dataset.aspectRatio = String(aspectRatio);
+          wrapper.dataset.imageLoading = "true";
+        } else {
+          delete wrapper.dataset.aspectRatio;
+          wrapper.dataset.imageLoading = "false";
+        }
 
         if (attrs.mimeType) {
           wrapper.dataset.mimeType = attrs.mimeType;
@@ -200,6 +289,7 @@ export const InlineImage = Image.extend({
         }
 
         applyImageAttributes(image, attrs);
+        syncLoadingState(attrs);
         handle.tabIndex = editor.isEditable ? 0 : -1;
         handle.hidden = !editor.isEditable;
       };
@@ -219,7 +309,7 @@ export const InlineImage = Image.extend({
 
         const roundedWidth = Math.round(nextWidth);
         currentWidth = roundedWidth;
-        applyWrapperWidth(wrapper, {
+        applyWrapperDimensions(wrapper, {
           ...currentAttrs,
           width: roundedWidth,
         });
@@ -267,6 +357,8 @@ export const InlineImage = Image.extend({
         window.addEventListener("pointerup", handlePointerUp);
       });
 
+      image.addEventListener("load", handleImageLoad);
+      image.addEventListener("error", handleImageError);
       syncNode(node.attrs as InlineImageAttrs);
 
       return {
@@ -275,6 +367,8 @@ export const InlineImage = Image.extend({
         destroy: () => {
           window.removeEventListener("pointermove", handlePointerMove);
           window.removeEventListener("pointerup", handlePointerUp);
+          image.removeEventListener("load", handleImageLoad);
+          image.removeEventListener("error", handleImageError);
           dragSession = null;
         },
         stopEvent: (event) => {

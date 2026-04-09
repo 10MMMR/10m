@@ -77,6 +77,94 @@ describe("assistant contract", () => {
     );
   });
 
+  test("accepts fenced JSON and wrapped note documents", () => {
+    expect(
+      normalizeGeneratedNoteDocument(
+        '```json\n{"contentJson":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Wrapped"}]}]}}\n```',
+      ),
+    ).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Wrapped" }],
+        },
+      ],
+    });
+  });
+
+  test("parses JSON from noisy model output when a valid object is present", () => {
+    expect(
+      normalizeGeneratedNoteDocument(
+        'Here is your document:\n{"noteDocument":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]}]}}\nThanks!',
+      ),
+    ).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Hello" }],
+        },
+      ],
+    });
+  });
+
+  test("keeps image aspectRatio validation strict for generated note documents", () => {
+    expect(
+      normalizeGeneratedNoteDocument(
+        JSON.stringify({
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "image",
+                  attrs: {
+                    src: "https://example.com/image.png",
+                    aspectRatio: 1.5,
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        type: "doc",
+      }),
+    );
+
+    expect(() =>
+      normalizeGeneratedNoteDocument(
+        JSON.stringify({
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "image",
+                  attrs: {
+                    src: "https://example.com/image.png",
+                    aspectRatio: 0,
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).toThrow("AI returned an invalid note document.");
+
+    expect(() =>
+      normalizeGeneratedNoteDocument(
+        '{"type":"doc","content":[{"type":"paragraph","content":[{"type":"image","attrs":{"src":"https://example.com/image.png","aspectRatio":1e309}}]}]}',
+      ),
+    ).toThrow("AI returned an invalid note document.");
+  });
+
   test("reply remains the safe fallback for unsupported capabilities", () => {
     expect(
       parseAssistantCommand(

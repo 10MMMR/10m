@@ -62,12 +62,76 @@ export const ASSISTANT_ACTION_BEHAVIOR = {
   unsupportedActionHandling: AI_ACTION_REGISTRY.unsupportedActionReplyGuidance,
 } as const;
 
-function asRecord(value: unknown) {
-  return value && typeof value === "object" ? value : null;
-}
-
 function getString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stripCodeFence(raw: string) {
+  const trimmed = raw.trim();
+
+  if (!trimmed.startsWith("```")) {
+    return trimmed;
+  }
+
+  const withoutStart = trimmed.replace(/^```[a-zA-Z0-9_-]*\s*/, "");
+  return withoutStart.replace(/\s*```$/, "").trim();
+}
+
+function tryParseJson(raw: string): unknown {
+  const fenced = stripCodeFence(raw);
+
+  try {
+    return JSON.parse(fenced);
+  } catch {
+    const start = fenced.indexOf("{");
+    const end = fenced.lastIndexOf("}");
+
+    if (start < 0 || end <= start) {
+      throw new Error("AI returned invalid JSON for note content.");
+    }
+
+    try {
+      return JSON.parse(fenced.slice(start, end + 1));
+    } catch {
+      throw new Error("AI returned invalid JSON for note content.");
+    }
+  }
+}
+
+function unwrapNoteDocument(value: unknown): unknown {
+  const record = asRecord(value);
+
+  if (!record) {
+    return value;
+  }
+
+  if (record.type === "doc" && Array.isArray(record.content)) {
+    return record;
+  }
+
+  const directCandidates = [
+    record.contentJson,
+    record.noteDocument,
+    record.document,
+    record.doc,
+    record.note,
+  ];
+
+  for (const candidate of directCandidates) {
+    const candidateRecord = asRecord(candidate);
+
+    if (candidateRecord?.type === "doc" && Array.isArray(candidateRecord.content)) {
+      return candidateRecord;
+    }
+  }
+
+  return value;
 }
 
 export function parseAssistantCommand(raw: string): AssistantCommand {
@@ -117,13 +181,7 @@ export function parseAssistantCommand(raw: string): AssistantCommand {
 }
 
 export function normalizeGeneratedNoteDocument(raw: string): NoteDocument {
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("AI returned invalid JSON for note content.");
-  }
-
-  return parseAiNoteDocument(parsed);
+  const parsed = tryParseJson(raw);
+  const document = unwrapNoteDocument(parsed);
+  return parseAiNoteDocument(document);
 }

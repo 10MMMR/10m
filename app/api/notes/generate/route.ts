@@ -81,6 +81,7 @@ export async function POST(request: Request) {
   try {
     getAiConfig();
   } catch (error) {
+    console.error("[api/notes/generate] Invalid AI config.", error);
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : "AI config is invalid.",
@@ -150,6 +151,7 @@ export async function POST(request: Request) {
   try {
     provider = getAiProvider();
   } catch (error) {
+    console.error("[api/notes/generate] AI provider unavailable.", error);
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : "AI provider is unavailable.",
@@ -157,6 +159,8 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   }
+
+  let generatedTextPreview = "";
 
   try {
     const { parts } = await buildSourceContextParts({
@@ -189,6 +193,7 @@ export async function POST(request: Request) {
       responseMimeType: "application/json",
       systemInstruction: NOTE_GENERATION_SYSTEM_PROMPT,
     });
+    generatedTextPreview = generatedText.slice(0, 800);
 
     const contentJson = normalizeGeneratedNoteDocument(generatedText);
 
@@ -197,6 +202,10 @@ export async function POST(request: Request) {
       ...(title ? { title } : {}),
     });
   } catch (error) {
+    console.error("[api/notes/generate] Note generation failed.", {
+      error,
+      generatedTextPreview,
+    });
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : "Unable to generate note.",

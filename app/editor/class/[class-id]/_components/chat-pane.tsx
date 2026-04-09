@@ -66,12 +66,12 @@ export function ChatPane({
           : ""
       }`}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-(--border-soft) px-5 py-5">
+      <div className="flex items-center justify-between gap-3 border-b border-(--border-soft) p-3">
         <div>
           <h2 className="m-0">Study Assistant</h2>
         </div>
         <button
-          className="grid h-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) px-3 py-2 text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
+          className="grid h-9 w-9 place-items-center rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
           onClick={onHide}
           type="button"
           aria-label="Hide chat"

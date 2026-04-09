@@ -21,12 +21,7 @@ import {
 import { Topbar } from "./topbar";
 import { getWorkspaceSeed, type Message } from "../_lib/workspace-data";
 import type { AssistantCommand } from "@/lib/ai/assistant-contract";
-import {
-  EMPTY_NOTE_DOCUMENT,
-  parseNoteDocument,
-  serializeNoteDocumentForComparison,
-  type NoteDocument,
-} from "@/lib/note-document";
+import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import {
   clearTreeUiState,
@@ -45,13 +40,6 @@ import {
   type TreeNodeKind,
   updateNodeInTree,
 } from "@/lib/tree-repository";
-import {
-  formatRetryDelay,
-  parseRateLimit,
-  parseSampledResponse,
-  type ClientRateLimitState,
-} from "@/lib/api/client-rate-limit";
-import { FloatingPopupBanner } from "@/app/_components/floating-popup-banner";
 
 import { supabase } from "../../../../_global/authentication/supabaseClient";
 import { handleGoogleSignIn } from "../../../../_global/authentication/authentication";
@@ -64,9 +52,8 @@ const STORAGE_NOT_CONFIGURED_MESSAGE = "Supabase storage is not configured.";
 
 type WorkspaceShellProps = {
   classId: string;
-  imageStorageBucket: string | null;
-  pdfStorageBucket: string | null;
   requestedClassId: string;
+  storageBucket: string | null;
   usedFallback: boolean;
 };
 
@@ -86,16 +73,6 @@ type UploadPdfResponse = {
   fileNode?: TreeNode;
   tree?: TreeNode[];
 };
-
-type UploadImageResponse = {
-  error?: string;
-  fileName?: string;
-  mimeType?: string;
-  signedUrl?: string;
-  storagePath?: string;
-};
-
-const IMAGE_SIGNED_URL_TTL_SECONDS = 60 * 5;
 
 type DeletePdfResponse = {
   error?: string;
@@ -119,16 +96,10 @@ type ChatRequestMessage = {
   content: string;
 };
 
-type InvalidNoteDocumentLogPayload = {
-  classId: string;
-  error: string;
-  noteId: string;
-};
-
 type DraftNoteContext = {
   nodeId: string;
   title: string;
-  contentJson: NoteDocument;
+  body: string;
 };
 
 type ChatResponse = {
@@ -137,26 +108,10 @@ type ChatResponse = {
 };
 
 type GenerateNoteResponse = {
-  contentJson?: NoteDocument;
   error?: string;
+  html?: string;
   title?: string;
 };
-
-type NoteGenerationErrorKind = "error" | "rate_limited";
-
-type NoteGenerationError = Error & {
-  kind: NoteGenerationErrorKind;
-  retryInSeconds?: number;
-  targetContextId?: string;
-};
-
-type RateLimitedAction =
-  | "chat"
-  | "deletePdf"
-  | "invalidDocLog"
-  | "noteGeneration"
-  | "uploadImage"
-  | "uploadPdf";
 
 type AuthStatus = "loading" | "signed-out" | "signed-in" | "unavailable";
 
@@ -193,7 +148,7 @@ function createMessage(
 function toChatRequestMessages(messages: Message[]): ChatRequestMessage[] {
   return messages
     .map((message) => ({
-      role: (message.side === "assistant" ? "assistant" : "user") as ChatRequestMessage["role"],
+      role: message.side === "assistant" ? "assistant" : "user",
       content: message.text.trim(),
     }))
     .filter((message) => message.content.length > 0);
@@ -201,149 +156,13 @@ function toChatRequestMessages(messages: Message[]): ChatRequestMessage[] {
 
 function buildUpdatedNote(
   node: TreeNode,
-  updates: Partial<Pick<TreeNode, "contentJson" | "title">>,
-  options?: {
-    touchUpdatedAt?: boolean;
-  },
+  updates: Partial<Pick<TreeNode, "title" | "body">>,
 ) {
   return {
     ...node,
     ...updates,
-    updatedAt:
-      options?.touchUpdatedAt === false ? node.updatedAt : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
-}
-
-function createNoteGenerationError({
-  kind,
-  message,
-  retryInSeconds,
-  targetContextId,
-}: {
-  kind: NoteGenerationErrorKind;
-  message: string;
-  retryInSeconds?: number;
-  targetContextId?: string;
-}) {
-  const error = new Error(message) as NoteGenerationError;
-  error.kind = kind;
-  error.retryInSeconds = retryInSeconds;
-  error.targetContextId = targetContextId;
-  return error;
-}
-
-function isNoteGenerationError(value: unknown): value is NoteGenerationError {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const kind = Reflect.get(value, "kind");
-  return kind === "error" || kind === "rate_limited";
-}
-
-function mapNoteDocument(
-  node: NoteDocument,
-  mapper: (node: NoteDocument) => NoteDocument,
-): NoteDocument {
-  const nextNode = mapper(node);
-
-  if (!nextNode.content?.length) {
-    return nextNode;
-  }
-
-  const nextContent = nextNode.content.map((child) => mapNoteDocument(child, mapper));
-
-  return {
-    ...nextNode,
-    content: nextContent,
-  };
-}
-
-function collectImageStoragePaths(document: NoteDocument) {
-  const storagePaths = new Set<string>();
-
-  mapNoteDocument(document, (node) => {
-    if (
-      (node.type === "image" || node.type === "inlineImage") &&
-      typeof node.attrs?.storagePath === "string" &&
-      node.attrs.storagePath.length > 0
-    ) {
-      storagePaths.add(node.attrs.storagePath);
-    }
-
-    return node;
-  });
-
-  return Array.from(storagePaths);
-}
-
-function replaceImageSources(
-  document: NoteDocument,
-  signedUrlByPath: Map<string, string>,
-) {
-  let changed = false;
-
-  const nextDocument = mapNoteDocument(document, (node) => {
-    if (node.type !== "image" && node.type !== "inlineImage") {
-      return node;
-    }
-
-    const storagePath = node.attrs?.storagePath;
-
-    if (typeof storagePath !== "string" || storagePath.length === 0) {
-      return node;
-    }
-
-    const nextSrc = signedUrlByPath.get(storagePath);
-
-    if (!nextSrc || node.attrs?.src === nextSrc) {
-      return node;
-    }
-
-    changed = true;
-
-    return {
-      ...node,
-      attrs: {
-        ...node.attrs,
-        src: nextSrc,
-      },
-    };
-  });
-
-  return changed ? nextDocument : document;
-}
-
-function sanitizeImageSourcesForPersistence(document: NoteDocument) {
-  let changed = false;
-
-  const nextDocument = mapNoteDocument(document, (node) => {
-    if (node.type !== "image" && node.type !== "inlineImage") {
-      return node;
-    }
-
-    const storagePath = node.attrs?.storagePath;
-
-    if (typeof storagePath !== "string" || storagePath.length === 0) {
-      return node;
-    }
-
-    if (node.attrs?.src === storagePath) {
-      return node;
-    }
-
-    changed = true;
-
-    return {
-      ...node,
-      attrs: {
-        ...node.attrs,
-        src: storagePath,
-      },
-    };
-  });
-
-  return changed ? nextDocument : document;
 }
 
 function isPdfFile(file: File) {
@@ -431,14 +250,31 @@ function buildGeneratedNoteTitle(
   return `Study Notes - ${firstNode.title} + ${sourceNodes.length - 1} more`;
 }
 
+function buildGeneratingNoteHtml() {
+  return "<p><strong>Generating study notes...</strong></p><p>StudyAI is building a structured note from the selected material.</p>";
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function buildGenerationFailureHtml(message: string) {
+  return `<p><strong>Unable to generate note.</strong></p><p>${escapeHtml(message)}</p>`;
+}
+
 export function WorkspaceShell({
   classId,
-  imageStorageBucket,
-  pdfStorageBucket,
   requestedClassId,
+  storageBucket,
   usedFallback,
 }: WorkspaceShellProps) {
   const workspace = getWorkspaceSeed(classId);
+  // const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const treeRepository = useRef<SupabaseTreeRepository | null>(
     supabase ? new SupabaseTreeRepository(supabase) : null,
   );
@@ -473,22 +309,16 @@ export function WorkspaceShell({
     null,
   );
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
-  const [isUploadProgressDismissed, setIsUploadProgressDismissed] = useState(false);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(
     supabase ? "loading" : "unavailable",
   );
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [selectedPdfUrl, setSelectedPdfUrl] = useState<string | null>(null);
-  const [isLoadingSelectedNote, setIsLoadingSelectedNote] = useState(false);
   const pendingSignInUiResetUserIdRef = useRef<string | null>(null);
   const restoredTreeUiStateKeyRef = useRef<string | null>(null);
   const [pendingUploadParentId, setPendingUploadParentId] = useState<
     string | null
   >(null);
-  const [actionCooldowns, setActionCooldowns] = useState<
-    Partial<Record<RateLimitedAction, number>>
-  >({});
-  const [cooldownTick, setCooldownTick] = useState(0);
 
   const desktopGridColumns = isLeftPaneCollapsed
     ? isChatOpen
@@ -550,38 +380,9 @@ export function WorkspaceShell({
     return {
       nodeId: draftNoteNode.id,
       title: draftNoteNode.title,
-      contentJson: draftNoteNode.contentJson ?? EMPTY_NOTE_DOCUMENT,
+      body: draftNoteNode.body || "<p></p>",
     } satisfies DraftNoteContext;
   }, [draftNoteNode]);
-  const draftNoteId = draftNoteNode?.kind === "note" ? draftNoteNode.id : null;
-  const draftNoteImageStoragePaths = useMemo(() => {
-    if (!draftNoteNode || draftNoteNode.kind !== "note") {
-      return [];
-    }
-
-    return collectImageStoragePaths(draftNoteNode.contentJson ?? EMPTY_NOTE_DOCUMENT);
-  }, [draftNoteNode]);
-  const draftNoteImageStoragePathKey = useMemo(
-    () => draftNoteImageStoragePaths.join("|"),
-    [draftNoteImageStoragePaths],
-  );
-  const draftNoteImageStoragePathsRef = useRef(draftNoteImageStoragePaths);
-
-  useEffect(() => {
-    const hasActiveCooldown = Object.values(actionCooldowns).some(
-      (retryAtMs) => Boolean(retryAtMs && retryAtMs > Date.now()),
-    );
-
-    if (!hasActiveCooldown) {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      setCooldownTick((current) => current + 1);
-    }, 1000);
-
-    return () => window.clearInterval(intervalId);
-  }, [actionCooldowns]);
 
   const resetWorkspaceState = useCallback(() => {
     setTreeNodes([]);
@@ -590,13 +391,11 @@ export function WorkspaceShell({
     setSelectedNodeKind(null);
     setSelectionAnchorId(null);
     setDraftNoteNode(null);
-    setIsLoadingSelectedNote(false);
     setExpandedIds(new Set());
     setSelectedPdfUrl(null);
     setIsDirty(false);
     setUploadFeedback(null);
     setIsUploadingPdf(false);
-    setIsUploadProgressDismissed(false);
     setPendingUploadParentId(null);
   }, []);
 
@@ -605,105 +404,12 @@ export function WorkspaceShell({
       resetWorkspaceState();
       return [];
     }
-    const nodes = await treeRepository.current.listTreeByClass(classId, {
-      includeNoteContent: false,
-    });
+
+    const nodes = await treeRepository.current.listTreeByClass(classId);
     setTreeNodes(nodes);
     treeNodesRef.current = nodes;
     return nodes;
   }, [authUser, classId, resetWorkspaceState]);
-
-  const getAccessToken = useCallback(async () => {
-    if (!supabase) {
-      return null;
-    }
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    return session?.access_token ?? null;
-  }, []);
-
-  const setCooldown = useCallback(
-    (action: RateLimitedAction, state: ClientRateLimitState) => {
-      if (!state.isRateLimited) {
-        return;
-      }
-
-      setActionCooldowns((current) => ({
-        ...current,
-        [action]: state.retryAtMs,
-      }));
-    },
-    [],
-  );
-
-  const getRemainingCooldown = useCallback(
-    (action: RateLimitedAction) => {
-      const now = Date.now() + cooldownTick * 0;
-      const retryAtMs = actionCooldowns[action] ?? 0;
-
-      if (retryAtMs <= 0) {
-        return 0;
-      }
-
-      return Math.max(0, Math.ceil((retryAtMs - now) / 1000));
-    },
-    [actionCooldowns, cooldownTick],
-  );
-
-  const isCoolingDown = useCallback(
-    (action: RateLimitedAction) => getRemainingCooldown(action) > 0,
-    [getRemainingCooldown],
-  );
-
-  const logInvalidNoteDocument = useCallback(async ({
-    classId,
-    error,
-    noteId,
-  }: InvalidNoteDocumentLogPayload) => {
-    try {
-      if (isCoolingDown("invalidDocLog")) {
-        return;
-      }
-
-      const accessToken = await getAccessToken();
-
-      if (!accessToken) {
-        return;
-      }
-
-      const response = await fetch("/api/editor/log-invalid-document", {
-        body: JSON.stringify({
-          classId,
-          error,
-          noteId,
-        }),
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-      });
-      const payload = await response.json().catch(() => null);
-
-      if (parseSampledResponse(response, payload)) {
-        return;
-      }
-
-      const rateLimit = parseRateLimit(
-        response,
-        "Too many invalid-document logs. Please wait before retrying.",
-      );
-
-      if (rateLimit.isRateLimited) {
-        setCooldown("invalidDocLog", rateLimit);
-      }
-    } catch {
-      // Logging should never block the editor from loading.
-    }
-  }, [getAccessToken, isCoolingDown, setCooldown]);
 
   const persistTree = useCallback(
     async (nextNodes: TreeNode[]) => {
@@ -721,6 +427,18 @@ export function WorkspaceShell({
     },
     [authUser, classId],
   );
+
+  // const getAccessToken = useCallback(async () => {
+  //   if (!supabase) {
+  //     return null;
+  //   }
+
+  //   const {
+  //     data: { session },
+  //   } = await supabase.auth.getSession();
+
+  //   return session?.access_token ?? null;
+  // }, [supabase]);
 
   const syncSelectionState = useCallback(
     (
@@ -747,6 +465,7 @@ export function WorkspaceShell({
       if (activeNode?.kind === "note") {
         setDraftNoteNode({
           ...activeNode,
+          body: activeNode.body || "<p></p>",
         });
       } else {
         setDraftNoteNode(null);
@@ -756,83 +475,6 @@ export function WorkspaceShell({
     },
     [],
   );
-
-  useEffect(() => {
-    if (!treeRepository.current || selectedNodeKind !== "note" || !selectedNodeId) {
-      setIsLoadingSelectedNote(false);
-      return;
-    }
-
-    const selectedNote = treeNodes.find((node) => node.id === selectedNodeId);
-
-    if (!selectedNote || selectedNote.kind !== "note") {
-      setIsLoadingSelectedNote(false);
-      return;
-    }
-
-    if (selectedNote.contentJson !== undefined) {
-      setIsLoadingSelectedNote(false);
-      return;
-    }
-
-    if (!selectedNote.noteId) {
-      setIsLoadingSelectedNote(false);
-      return;
-    }
-
-    let cancelled = false;
-    setIsLoadingSelectedNote(true);
-
-    void treeRepository.current.loadNoteById(classId, selectedNote.noteId, {
-      onInvalidNoteDocument: logInvalidNoteDocument,
-    }).then((loadedNote) => {
-      if (cancelled) {
-        return;
-      }
-
-      if (!loadedNote?.content_json) {
-        throw new Error("Unable to load note.");
-      }
-
-      const hydratedNote: TreeNode = {
-        ...selectedNote,
-        contentJson: loadedNote.content_json,
-        createdAt: loadedNote.created_at,
-        title: loadedNote.title,
-        updatedAt: loadedNote.updated_at,
-      };
-
-      setTreeNodes((current) => {
-        const nextNodes = updateNodeInTree(current, hydratedNote);
-        treeNodesRef.current = nextNodes;
-        return nextNodes;
-      });
-      setDraftNoteNode((current) =>
-        current?.kind === "note" && current.id === hydratedNote.id ? hydratedNote : current,
-      );
-      setIsLoadingSelectedNote(false);
-    }).catch((error) => {
-      if (cancelled) {
-        return;
-      }
-
-      setIsLoadingSelectedNote(false);
-      setUploadFeedback({
-        type: "error",
-        message: error instanceof Error ? error.message : "Unable to load note.",
-      });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    classId,
-    logInvalidNoteDocument,
-    selectedNodeId,
-    selectedNodeKind,
-    treeNodes,
-  ]);
 
   const setMessagesForContext = useCallback(
     (contextId: string, nextMessages: Message[]) => {
@@ -1003,7 +645,7 @@ export function WorkspaceShell({
     );
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
     if (authStatus !== "signed-in" || !authUser) {
@@ -1083,7 +725,7 @@ export function WorkspaceShell({
   }, [authStatus, authUser, classId, syncSelectionState, treeNodes]);
 
   useEffect(() => {
-    if (!supabase || !pdfStorageBucket || !selectedFileNode?.fileStoragePath) {
+    if (!supabase || !storageBucket || !selectedFileNode?.fileStoragePath) {
       setSelectedPdfUrl(null);
       return;
     }
@@ -1091,8 +733,11 @@ export function WorkspaceShell({
     let cancelled = false;
 
     void supabase.storage
-      .from(pdfStorageBucket)
-      .createSignedUrl(selectedFileNode.fileStoragePath, PDF_SIGNED_URL_TTL_SECONDS)
+      .from(storageBucket)
+      .createSignedUrl(
+        selectedFileNode.fileStoragePath,
+        PDF_SIGNED_URL_TTL_SECONDS,
+      )
       .then(({ data, error }) => {
         if (cancelled) {
           return;
@@ -1113,82 +758,7 @@ export function WorkspaceShell({
     return () => {
       cancelled = true;
     };
-  }, [pdfStorageBucket, selectedFileNode]);
-
-  useEffect(() => {
-    draftNoteImageStoragePathsRef.current = draftNoteImageStoragePaths;
-  }, [draftNoteImageStoragePathKey, draftNoteImageStoragePaths]);
-
-  useEffect(() => {
-    if (!supabase || !imageStorageBucket || !draftNoteId) {
-      return;
-    }
-
-    const storagePaths = draftNoteImageStoragePathsRef.current;
-
-    if (storagePaths.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-
-    void supabase.storage
-      .from(imageStorageBucket)
-      .createSignedUrls(storagePaths, IMAGE_SIGNED_URL_TTL_SECONDS)
-      .then(({ data, error }) => {
-        if (cancelled || error || !data) {
-          return;
-        }
-
-        const signedUrlByPath = new Map<string, string>();
-
-        data.forEach((entry, index) => {
-          const storagePath = storagePaths[index];
-
-          if (storagePath && entry?.signedUrl) {
-            signedUrlByPath.set(storagePath, entry.signedUrl);
-          }
-        });
-
-        if (signedUrlByPath.size === 0) {
-          return;
-        }
-
-        setDraftNoteNode((current) => {
-          if (!current || current.kind !== "note" || current.id !== draftNoteId) {
-            return current;
-          }
-
-          const currentDocument = current.contentJson ?? EMPTY_NOTE_DOCUMENT;
-          const nextDocument = replaceImageSources(currentDocument, signedUrlByPath);
-
-          if (
-            serializeNoteDocumentForComparison(currentDocument) ===
-            serializeNoteDocumentForComparison(nextDocument)
-          ) {
-            return current;
-          }
-
-          return buildUpdatedNote(
-            current,
-            {
-              contentJson: nextDocument,
-            },
-            {
-              touchUpdatedAt: false,
-            },
-          );
-        });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    draftNoteId,
-    draftNoteImageStoragePathKey,
-    imageStorageBucket,
-  ]);
+  }, [selectedFileNode, storageBucket, supabase]);
 
   const handleHideChat = () => {
     if (isChatOpen) {
@@ -1271,24 +841,29 @@ export function WorkspaceShell({
 
   const persistNoteNode = useCallback(
     async (node: TreeNode) => {
-      const noteToPersist =
-        node.kind === "note"
-          ? {
-              ...node,
-              contentJson: sanitizeImageSourcesForPersistence(
-                node.contentJson ?? EMPTY_NOTE_DOCUMENT,
-              ),
-            }
-          : node;
-
-      const savedNodes = await persistTree(updateNodeInTree(treeNodesRef.current, noteToPersist));
-      syncSelectionState(savedNodes, [noteToPersist.id], noteToPersist.id);
-      setSelectionAnchorId(noteToPersist.id);
+      const savedNodes = await persistTree(
+        updateNodeInTree(treeNodesRef.current, node),
+      );
+      syncSelectionState(savedNodes, [node.id], node.id);
+      setSelectionAnchorId(node.id);
       setIsDirty(false);
 
-      return savedNodes.find((item) => item.id === noteToPersist.id) ?? noteToPersist;
+      return savedNodes.find((item) => item.id === node.id) ?? node;
     },
     [persistTree, syncSelectionState],
+  );
+
+  const setDraftNoteContent = useCallback(
+    (noteId: string, title: string, body: string) => {
+      setDraftNoteNode((current) => {
+        if (!current || current.kind !== "note" || current.id !== noteId) {
+          return current;
+        }
+
+        return buildUpdatedNote(current, { body, title });
+      });
+    },
+    [],
   );
 
   const createNoteUnderParent = async (
@@ -1422,69 +997,40 @@ export function WorkspaceShell({
   };
 
   const generateNoteFromSources = async ({
-    chatContextId,
+    chatSeedMessages,
     mode,
     prompt,
     sourceNodes,
     targetNoteId,
     title,
   }: {
-    chatContextId?: string;
+    chatSeedMessages?: Message[];
     mode: "new_note" | "overwrite_note";
     prompt: string;
     sourceNodes: TreeNode[];
     targetNoteId?: string;
     title?: string;
   }) => {
-    const generationCooldownSeconds = getRemainingCooldown("noteGeneration");
-
-    if (generationCooldownSeconds > 0) {
-      const cooldownMessage = `Note generation is temporarily rate limited. Try again in ${formatRetryDelay(generationCooldownSeconds)}.`;
-      setUploadFeedback({
-        type: "error",
-        message: cooldownMessage,
-      });
-      throw createNoteGenerationError({
-        kind: "rate_limited",
-        message: cooldownMessage,
-        retryInSeconds: generationCooldownSeconds,
-        targetContextId: chatContextId,
-      });
-    }
-
     if (!supabase || authStatus !== "signed-in") {
-      throw createNoteGenerationError({
-        kind: "error",
-        message: "Sign in with Google to use AI note generation.",
-        targetContextId: chatContextId,
-      });
+      throw new Error("Sign in with Google to use AI note generation.");
     }
 
     if (!rootNode) {
-      throw createNoteGenerationError({
-        kind: "error",
-        message: "Class root is unavailable.",
-        targetContextId: chatContextId,
-      });
+      throw new Error("Class root is unavailable.");
     }
 
     const accessToken = await getAccessToken();
 
     if (!accessToken) {
-      throw createNoteGenerationError({
-        kind: "error",
-        message: "Sign in with Google to use AI note generation.",
-        targetContextId: chatContextId,
-      });
+      throw new Error("Sign in with Google to use AI note generation.");
     }
 
     let effectiveMode = mode;
-    let targetNode: TreeNode | null =
+    let targetNode =
       effectiveMode === "overwrite_note" && targetNoteId
         ? (treeNodesRef.current.find((node) => node.id === targetNoteId) ??
           null)
         : null;
-    let targetContextId = targetNode?.id ?? chatContextId;
 
     const fallbackTitle =
       targetNode?.kind === "note" && !title
@@ -1493,21 +1039,23 @@ export function WorkspaceShell({
 
     if (!targetNode || targetNode.kind !== "note") {
       effectiveMode = "new_note";
-      targetNode = (await createNoteUnderParent(rootNode.id, {
+      targetNode = await createNoteUnderParent(rootNode.id, {
         markDirty: false,
         title: fallbackTitle,
-      })) ?? null;
+      });
 
       if (!targetNode || targetNode.kind !== "note") {
-        throw createNoteGenerationError({
-          kind: "error",
-          message: "Unable to create a note for AI generation.",
-          targetContextId: chatContextId,
-        });
+        throw new Error("Unable to create a note for AI generation.");
+      }
+
+      if (chatSeedMessages) {
+        setMessagesForContext(targetNode.id, chatSeedMessages);
       }
     }
 
-    targetContextId = targetNode.id;
+    const generatingBody = buildGeneratingNoteHtml();
+    setDraftNoteContent(targetNode.id, fallbackTitle, generatingBody);
+    setIsDirty(false);
 
     const response = await fetch("/api/notes/generate", {
       method: "POST",
@@ -1532,41 +1080,19 @@ export function WorkspaceShell({
     const payload = (await response
       .json()
       .catch(() => null)) as GenerateNoteResponse | null;
-    const generationRateLimit = parseRateLimit(
-      response,
-      payload?.error || "Too many note-generation requests. Please try again shortly.",
-    );
 
-    if (generationRateLimit.isRateLimited) {
-      setCooldown("noteGeneration", generationRateLimit);
-      const cooldownMessage = `${generationRateLimit.message} Try again in ${formatRetryDelay(generationRateLimit.retryInSeconds)}.`;
-      setUploadFeedback({
-        type: "error",
-        message: cooldownMessage,
-      });
-      throw createNoteGenerationError({
-        kind: "rate_limited",
-        message: cooldownMessage,
-        retryInSeconds: generationRateLimit.retryInSeconds,
-        targetContextId,
-      });
-    }
-
-    if (!response.ok || !payload?.contentJson) {
+    if (!response.ok || !payload?.html) {
       const errorMessage = payload?.error || "Unable to generate note.";
-      setUploadFeedback({
-        type: "error",
-        message: errorMessage,
+      const failedNode = buildUpdatedNote(targetNode, {
+        body: buildGenerationFailureHtml(errorMessage),
+        title: fallbackTitle,
       });
-      throw createNoteGenerationError({
-        kind: "error",
-        message: errorMessage,
-        targetContextId,
-      });
+      await persistNoteNode(failedNode);
+      throw new Error(errorMessage);
     }
 
     const completedNode = buildUpdatedNote(targetNode, {
-      contentJson: parseNoteDocument(payload.contentJson),
+      body: payload.html,
       title: payload.title?.trim() || fallbackTitle,
     });
 
@@ -1607,7 +1133,6 @@ export function WorkspaceShell({
 
       try {
         await generateNoteFromSources({
-          chatContextId: node.id,
           mode: "new_note",
           prompt:
             "Create a premium-quality study note from the selected sources. Be concise, highly structured, exam-focused, and use tables or lists where they add clarity.",
@@ -1688,14 +1213,6 @@ export function WorkspaceShell({
       let nextNodes = treeNodesRef.current;
 
       if (fileNodesToDelete.length > 0) {
-        const deleteCooldownSeconds = getRemainingCooldown("deletePdf");
-
-        if (deleteCooldownSeconds > 0) {
-          throw new Error(
-            `Delete is temporarily rate limited. Try again in ${formatRetryDelay(deleteCooldownSeconds)}.`,
-          );
-        }
-
         const accessToken = await getAccessToken();
 
         if (!accessToken) {
@@ -1716,17 +1233,6 @@ export function WorkspaceShell({
         const payload = (await response
           .json()
           .catch(() => null)) as DeletePdfResponse | null;
-        const deleteRateLimit = parseRateLimit(
-          response,
-          payload?.error || "Too many delete requests. Please wait before retrying.",
-        );
-
-        if (deleteRateLimit.isRateLimited) {
-          setCooldown("deletePdf", deleteRateLimit);
-          throw new Error(
-            `${deleteRateLimit.message} Try again in ${formatRetryDelay(deleteRateLimit.retryInSeconds)}.`,
-          );
-        }
 
         if (!response.ok) {
           if (payload?.treeUpdated && payload.tree) {
@@ -1841,7 +1347,7 @@ export function WorkspaceShell({
       return;
     }
 
-    if (!supabase || !pdfStorageBucket) {
+    if (!supabase || !storageBucket) {
       setUploadFeedback({
         type: "error",
         message: STORAGE_NOT_CONFIGURED_MESSAGE,
@@ -1849,17 +1355,6 @@ export function WorkspaceShell({
       return;
     }
 
-    const uploadPdfCooldownSeconds = getRemainingCooldown("uploadPdf");
-
-    if (uploadPdfCooldownSeconds > 0) {
-      setUploadFeedback({
-        type: "error",
-        message: `PDF upload is temporarily rate limited. Try again in ${formatRetryDelay(uploadPdfCooldownSeconds)}.`,
-      });
-      return;
-    }
-
-    setIsUploadProgressDismissed(false);
     setIsUploadingPdf(true);
     setUploadFeedback(null);
 
@@ -1885,17 +1380,6 @@ export function WorkspaceShell({
       const payload = (await response
         .json()
         .catch(() => null)) as UploadPdfResponse | null;
-      const uploadPdfRateLimit = parseRateLimit(
-        response,
-        payload?.error || "Too many PDF uploads. Please wait before retrying.",
-      );
-
-      if (uploadPdfRateLimit.isRateLimited) {
-        setCooldown("uploadPdf", uploadPdfRateLimit);
-        throw new Error(
-          `${uploadPdfRateLimit.message} Try again in ${formatRetryDelay(uploadPdfRateLimit.retryInSeconds)}.`,
-        );
-      }
 
       if (!response.ok || !payload?.tree || !payload.fileNode) {
         throw new Error(
@@ -1944,95 +1428,23 @@ export function WorkspaceShell({
         return current;
       }
 
-      const next = buildUpdatedNote(current, { title }, { touchUpdatedAt: false });
+      const next = buildUpdatedNote(current, { title });
       setIsDirty(true);
       return next;
     });
   };
 
-  const handleBodyChange = (contentJson: NoteDocument) => {
+  const handleBodyChange = (body: string) => {
     setDraftNoteNode((current) => {
-      if (!current || current.kind !== "note") {
+      if (!current || current.kind !== "note" || current.body === body) {
         return current;
       }
 
-      if (
-        serializeNoteDocumentForComparison(current.contentJson ?? EMPTY_NOTE_DOCUMENT) ===
-        serializeNoteDocumentForComparison(contentJson)
-      ) {
-        return current;
-      }
-
-      const next = buildUpdatedNote(current, { contentJson }, { touchUpdatedAt: false });
+      const next = buildUpdatedNote(current, { body });
       setIsDirty(true);
       return next;
     });
   };
-
-  const handleUploadImage = useCallback(
-    async (file: File, noteId: string) => {
-      const uploadImageCooldownSeconds = getRemainingCooldown("uploadImage");
-
-      if (uploadImageCooldownSeconds > 0) {
-        throw new Error(
-          `Image upload is temporarily rate limited. Try again in ${formatRetryDelay(uploadImageCooldownSeconds)}.`,
-        );
-      }
-
-      if (!authUser) {
-        throw new Error(AUTH_REQUIRED_MESSAGE);
-      }
-
-      if (!imageStorageBucket) {
-        throw new Error(STORAGE_NOT_CONFIGURED_MESSAGE);
-      }
-
-      const accessToken = await getAccessToken();
-
-      if (!accessToken) {
-        throw new Error(AUTH_REQUIRED_MESSAGE);
-      }
-
-      const formData = new FormData();
-      formData.append("classId", classId);
-      formData.append("noteId", noteId);
-      formData.append("file", file);
-
-      const response = await fetch("/api/uploads/image", {
-        body: formData,
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        method: "POST",
-      });
-      const payload = (await response.json().catch(() => null)) as UploadImageResponse | null;
-      const uploadImageRateLimit = parseRateLimit(
-        response,
-        payload?.error || "Too many image uploads. Please wait before retrying.",
-      );
-
-      if (uploadImageRateLimit.isRateLimited) {
-        setCooldown("uploadImage", uploadImageRateLimit);
-        throw new Error(
-          `${uploadImageRateLimit.message} Try again in ${formatRetryDelay(uploadImageRateLimit.retryInSeconds)}.`,
-        );
-      }
-
-      if (!response.ok || !payload?.signedUrl || !payload.storagePath) {
-        throw new Error(payload?.error || "Unable to upload image.");
-      }
-
-      return {
-        alt: payload.fileName ?? file.name,
-        mimeType: payload.mimeType ?? file.type ?? null,
-        src: payload.signedUrl,
-        storagePath: payload.storagePath,
-        title: payload.fileName ?? file.name,
-        width: null,
-      };
-    },
-    [authUser, classId, getAccessToken, getRemainingCooldown, imageStorageBucket, setCooldown],
-  );
 
   const handleSaveNote = async () => {
     if (!draftNoteNode || draftNoteNode.kind !== "note") {
@@ -2040,32 +1452,14 @@ export function WorkspaceShell({
     }
 
     try {
-      const currentDraft = draftNoteNode;
-      const persistedContentJson = sanitizeImageSourcesForPersistence(
-        currentDraft.contentJson ?? EMPTY_NOTE_DOCUMENT,
-      );
       const savedNodes = await persistTree(
         updateNodeInTree(treeNodesRef.current, {
-          ...currentDraft,
-          contentJson: persistedContentJson,
+          ...draftNoteNode,
+          body: draftNoteNode.body || "<p></p>",
         }),
       );
 
-      syncSelectionState(savedNodes, [currentDraft.id], currentDraft.id);
-      setDraftNoteNode((current) => {
-        if (!current || current.kind !== "note" || current.id !== currentDraft.id) {
-          return current;
-        }
-
-        return buildUpdatedNote(
-          current,
-          {
-            contentJson: currentDraft.contentJson ?? EMPTY_NOTE_DOCUMENT,
-            title: currentDraft.title,
-          },
-          { touchUpdatedAt: false },
-        );
-      });
+      syncSelectionState(savedNodes, [draftNoteNode.id], draftNoteNode.id);
       setIsDirty(false);
     } catch (error) {
       setUploadFeedback({
@@ -2115,18 +1509,6 @@ export function WorkspaceShell({
     const userMessage = createMessage("user", trimmedInput);
     const sourceContextId = activeAiContextId;
     const nextMessages = [...activeChatMessages, userMessage];
-    const chatCooldownSeconds = getRemainingCooldown("chat");
-
-    if (chatCooldownSeconds > 0) {
-      setMessagesForContext(sourceContextId, [
-        ...activeChatMessages,
-        createMessage(
-          "assistant",
-          `Chat is temporarily rate limited. Try again in ${formatRetryDelay(chatCooldownSeconds)}.`,
-        ),
-      ]);
-      return;
-    }
 
     if (!supabase || authStatus !== "signed-in") {
       setMessagesForContext(sourceContextId, [
@@ -2180,22 +1562,6 @@ export function WorkspaceShell({
       const payload = (await response
         .json()
         .catch(() => null)) as ChatResponse | null;
-      const chatRateLimit = parseRateLimit(
-        response,
-        payload?.error || "Too many chat requests. Please try again shortly.",
-      );
-
-      if (chatRateLimit.isRateLimited) {
-        setCooldown("chat", chatRateLimit);
-        setMessagesForContext(sourceContextId, [
-          ...nextMessages,
-          createMessage(
-            "assistant",
-            `${chatRateLimit.message} Try again in ${formatRetryDelay(chatRateLimit.retryInSeconds)}.`,
-          ),
-        ]);
-        return;
-      }
 
       if (!response.ok || !payload?.assistant) {
         throw new Error(
@@ -2227,45 +1593,25 @@ export function WorkspaceShell({
         payload.assistant.target === "current_note" &&
         selectedNodeKind === "note";
 
-      const generatedNode = await generateNoteFromSources({
-        chatContextId: sourceContextId,
+      if (shouldOverwriteCurrent) {
+        setMessagesForContext(sourceContextId, [
+          ...nextMessages,
+          assistantMessage,
+        ]);
+      }
+
+      await generateNoteFromSources({
+        chatSeedMessages: shouldOverwriteCurrent
+          ? undefined
+          : [userMessage, assistantMessage],
         mode: shouldOverwriteCurrent ? "overwrite_note" : "new_note",
         prompt: payload.assistant.prompt,
         sourceNodes,
         targetNoteId: shouldOverwriteCurrent ? sourceContextId : undefined,
         title: payload.assistant.title,
       });
-      const successContextId = shouldOverwriteCurrent
-        ? sourceContextId
-        : generatedNode.id;
-
-      if (successContextId === sourceContextId) {
-        setMessagesForContext(sourceContextId, [
-          ...nextMessages,
-          assistantMessage,
-        ]);
-      } else {
-        setMessagesForContext(successContextId, [
-          userMessage,
-          assistantMessage,
-        ]);
-      }
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
-        return;
-      }
-
-      if (isNoteGenerationError(error)) {
-        const targetContextId = error.targetContextId || sourceContextId;
-        const priorMessages =
-          targetContextId === sourceContextId
-            ? nextMessages
-            : (chatSessions[targetContextId] ?? [userMessage]);
-
-        setMessagesForContext(targetContextId, [
-          ...priorMessages,
-          createMessage("assistant", error.message),
-        ]);
         return;
       }
 
@@ -2291,33 +1637,6 @@ export function WorkspaceShell({
         : authStatus === "signed-in"
           ? authUser?.email || authUser?.id || "Signed in"
           : "Continue with Google";
-  const chatCooldownSeconds = getRemainingCooldown("chat");
-  const isChatRateLimited = chatCooldownSeconds > 0;
-  const isChatDisabled = !activeAiContextId || isChatRateLimited;
-  const chatDisabledMessage = activeAiContextId
-    ? `Chat is temporarily rate limited. Try again in ${formatRetryDelay(chatCooldownSeconds)}.`
-    : "Open a note or PDF to chat with StudyAI.";
-  const floatingPopupMessage = isUploadingPdf && !isUploadProgressDismissed
-    ? "Uploading PDF..."
-    : (uploadFeedback?.message ?? "");
-  const floatingPopupVariant = isUploadingPdf && !isUploadProgressDismissed
-    ? "info"
-    : uploadFeedback?.type === "success"
-      ? "success"
-      : uploadFeedback?.type === "error"
-        ? "error"
-        : "info";
-  const floatingPopupAutoDismissMs = isUploadingPdf && !isUploadProgressDismissed
-    ? null
-    : 8_000;
-  const handleCloseFloatingPopup = () => {
-    if (isUploadingPdf) {
-      setIsUploadProgressDismissed(true);
-      return;
-    }
-
-    setUploadFeedback(null);
-  };
 
   return (
     <main className='workspace-shell flex h-screen flex-col overflow-hidden'>
@@ -2333,14 +1652,6 @@ export function WorkspaceShell({
         authLabel={authLabel}
         onSignIn={handleGoogleSignIn}
         onSignOut={handleSignOut}
-      />
-      <FloatingPopupBanner
-        autoDismissMs={floatingPopupAutoDismissMs}
-        message={floatingPopupMessage}
-        onClose={handleCloseFloatingPopup}
-        open={Boolean(floatingPopupMessage)}
-        testId="workspace-feedback"
-        variant={floatingPopupVariant}
       />
       <input
         ref={pdfUploadInputRef}
@@ -2371,6 +1682,8 @@ export function WorkspaceShell({
           selectedNodeId={selectedNodeId}
           classLabel={workspace.classLabel}
           sessions={workspace.sessions}
+          uploadFeedback={uploadFeedback}
+          isUploadingPdf={isUploadingPdf}
           onSelectNode={handleSelectNode}
           onCreateFolder={handleCreateFolder}
           onAddAction={handleAddAction}
@@ -2382,13 +1695,12 @@ export function WorkspaceShell({
         <EditorPane
           lockIn={lockIn}
           onToggleLockIn={() => setLockIn((current) => !current)}
-          isNoteLoading={isLoadingSelectedNote}
-          noteId={selectedNodeKind === "note" ? selectedNodeId : null}
+          noteId={activeEditorNote?.id ?? null}
           note={
-            activeEditorNote && activeEditorNote.contentJson !== undefined
+            activeEditorNote
               ? {
                   title: activeEditorNote.title,
-                  contentJson: activeEditorNote.contentJson,
+                  body: activeEditorNote.body || "<p></p>",
                   createdAt: activeEditorNote.createdAt,
                   updatedAt: activeEditorNote.updatedAt,
                 }
@@ -2398,7 +1710,6 @@ export function WorkspaceShell({
           isDirty={isDirty}
           onTitleChange={handleTitleChange}
           onBodyChange={handleBodyChange}
-          onUploadImage={handleUploadImage}
           onSave={handleSaveNote}
           onDelete={handleDeleteCurrentNote}
           saveLabel='Save note'
@@ -2410,8 +1721,8 @@ export function WorkspaceShell({
         {isChatOpen ? (
           <div className='relative h-full min-h-0 min-w-0 overflow-hidden lg:col-span-2 xl:col-span-1'>
             <ChatPane
-              disabled={isChatDisabled}
-              disabledMessage={chatDisabledMessage}
+              disabled={!activeAiContextId}
+              disabledMessage='Open a note or PDF to chat with StudyAI.'
               locked={lockIn}
               isStreaming={isChatStreaming}
               onHide={handleHideChat}

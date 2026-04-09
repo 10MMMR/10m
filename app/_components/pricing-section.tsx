@@ -13,8 +13,8 @@ export function PricingSection() {
 
   return (
     <section id="pricing" className="section-shell max-w-7xl py-14 sm:py-20">
-      <div className="mb-10 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-        <div className="max-w-3xl">
+      <div className="mb-10 flex flex-col items-center gap-5 md:flex-row md:items-end md:justify-between">
+        <div className="max-w-3xl text-center md:text-left">
           <p className="mono-label text-[11px] font-semibold uppercase tracking-[0.15em] text-(--main)">
             Pricing
           </p>

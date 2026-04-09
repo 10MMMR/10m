@@ -198,6 +198,7 @@ body {
     radial-gradient(circle at 88% 14%, var(--ambient-b), transparent 42%);
   overflow-x: hidden;
   position: relative;
+  isolation: isolate;
   line-height: 1.45;
   font-family: var(--font-body), "Nunito", system-ui, sans-serif;
 }
@@ -207,7 +208,7 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 0;
+  z-index: -2;
   opacity: var(--grain-opacity);
   mix-blend-mode: var(--grain-blend);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.92' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E");
@@ -218,18 +219,13 @@ body::after {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 0;
+  z-index: -1;
   opacity: 0.25;
   background-size: 52px 52px;
   background-image:
     linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
     linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   mask-image: radial-gradient(circle at center, black 38%, transparent 100%);
-}
-
-body > * {
-  position: relative;
-  z-index: 1;
 }
 
 a {

@@ -6,7 +6,6 @@ import {
   ChevronDoubleRightIcon,
   ChevronRightIcon,
   DocumentIcon,
-  DocumentTextIcon,
   EllipsisVerticalIcon,
   FolderIcon,
   PlusIcon,
@@ -26,6 +25,7 @@ import {
   type TreeNode,
   type TreeNodeKind,
 } from "@/lib/tree-repository";
+import type { NoteSession } from "@/lib/supabase-note-session-repository";
 
 export type TreeAddAction = "folder" | "note" | "upload";
 export type TreeMenuAction = "add" | "delete" | "generate-notes";
@@ -46,8 +46,10 @@ type LeftPaneProps = {
   selectedNodeIds: string[];
   selectedNodeId: string | null;
   classLabel: string;
-  sessions: string[];
+  sessions: NoteSession[];
+  onSelectSession: (sessionId: string) => void;
   onSelectNode: (nodeId: string, options: SelectTreeNodeOptions) => void;
+  onClearSelectionToActive: () => void;
   onCreateFolder: () => void;
   onAddAction: (nodeId: string, action: TreeAddAction) => void;
   onMenuAction: (nodeId: string, action: TreeMenuAction) => void;
@@ -74,7 +76,7 @@ function getNodeIcon(kind: TreeNodeKind) {
     return DocumentIcon;
   }
 
-  return DocumentTextIcon;
+  return null;
 }
 
 function formatUpdatedAt(updatedAt: string) {
@@ -285,7 +287,9 @@ export function LeftPane({
   selectedNodeId,
   classLabel,
   sessions,
+  onSelectSession,
   onSelectNode,
+  onClearSelectionToActive,
   onCreateFolder,
   onAddAction,
   onMenuAction,
@@ -395,20 +399,6 @@ export function LeftPane({
     return ids;
   }, [childrenByParent, expandedIds, rootNode]);
 
-  const selectedFileIds = useMemo(
-    () =>
-      new Set(
-        treeNodes
-          .filter(
-            (node) =>
-              selectedNodeIds.includes(node.id) &&
-              (node.kind === "note" || node.kind === "file"),
-          )
-          .map((node) => node.id),
-      ),
-    [selectedNodeIds, treeNodes],
-  );
-
   const asideClass = `flex min-h-0 flex-col overflow-hidden border-b border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:border-r lg:border-b-0 ${
     locked
       ? "pointer-events-none select-none opacity-[0.55] grayscale-[0.85] saturate-[0.7]"
@@ -456,6 +446,40 @@ export function LeftPane({
     return `flex min-w-0 flex-1 items-start gap-2 px-2 py-1.5 text-left transition-colors duration-150 ${rowTone}`;
   };
 
+  const hasGeneratableSources = (nodeId: string): boolean => {
+    const node = treeNodes.find((item) => item.id === nodeId);
+
+    if (!node) {
+      return false;
+    }
+
+    if (node.kind === "note" || node.kind === "file") {
+      return true;
+    }
+
+    const stack = [...(childrenByParent.get(node.id) ?? [])];
+
+    while (stack.length > 0) {
+      const child = stack.pop();
+
+      if (!child) {
+        continue;
+      }
+
+      if (child.kind === "note" || child.kind === "file") {
+        return true;
+      }
+
+      const children = childrenByParent.get(child.id);
+
+      if (children?.length) {
+        stack.push(...children);
+      }
+    }
+
+    return false;
+  };
+
   const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
     const children = childrenByParent.get(node.id) ?? [];
     const hasChildren = children.length > 0;
@@ -476,8 +500,8 @@ export function LeftPane({
     const isPaneSelected = isSelected && hasPaneFocus;
     const isPaneMutedSelected = isSelected && !hasPaneFocus;
     const canGenerateNotes = isSelected
-      ? selectedFileIds.size > 0
-      : node.kind === "note" || node.kind === "file";
+      ? selectedNodeIds.some((selectedId) => hasGeneratableSources(selectedId))
+      : hasGeneratableSources(node.id);
     const toggleButtonTone = isPaneSelected
       ? "text-(--text-selection-active)"
       : "text-(--text-muted)";
@@ -602,7 +626,14 @@ export function LeftPane({
               }
               type='button'
             >
-              <Icon className={`mt-1 h-4 w-4 shrink-0 ${iconTone}`} aria-hidden='true' />
+              {Icon ? (
+                <Icon className={`mt-1 h-4 w-4 shrink-0 ${iconTone}`} aria-hidden='true' />
+              ) : (
+                <span
+                  className='mt-1.5 h-2 w-2 shrink-0 rounded-full bg-(--note-indicator)'
+                  aria-hidden='true'
+                />
+              )}
               <span className='min-w-0'>
                 <span className={`block truncate text-[14px] ${titleTone}`}>
                   {node.kind === "root" ? classLabel : node.title}
@@ -635,6 +666,17 @@ export function LeftPane({
           : null}
       </div>
     );
+  };
+
+  const handleTreeBackgroundClick = (
+    event: MouseEvent<HTMLDivElement>,
+  ) => {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    closeAllMenus();
+    onClearSelectionToActive();
   };
 
   if (collapsed) {
@@ -677,15 +719,6 @@ export function LeftPane({
             <h2 className='m-0'>Notes</h2>
           </div>
           <button
-            aria-label='Create folder'
-            className='inline-flex h-9 items-center gap-1 rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) px-2.5 text-[12px] text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
-            onClick={onCreateFolder}
-            type='button'
-          >
-            <FolderIcon className='h-4 w-4' aria-hidden='true' />
-            Folder
-          </button>
-          <button
             aria-label='Collapse notes pane'
             className='grid h-9 w-9 place-items-center rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
             onClick={onCollapse}
@@ -695,8 +728,13 @@ export function LeftPane({
           </button>
         </div>
 
-        <div className='min-h-0 flex-1 overflow-auto py-3'>
-          <div>{rootNode ? renderNode(rootNode, 0) : null}</div>
+        <div
+          className='min-h-0 flex-1 overflow-auto py-3'
+          onClick={handleTreeBackgroundClick}
+        >
+          <div className='min-h-full' onClick={handleTreeBackgroundClick}>
+            {rootNode ? renderNode(rootNode, 0) : null}
+          </div>
         </div>
       </section>
 
@@ -704,13 +742,33 @@ export function LeftPane({
         <div className='mono-label px-4 pt-3 pb-2 text-[11px] font-medium uppercase tracking-[0.15em] text-(--text-muted)'>
           Sessions
         </div>
-        <div className='max-h-40 overflow-auto px-2 pb-3'>
+        <div className='overflow-visible px-2 pb-3'>
           {sessions.map((session) => (
-            <div
-              key={session}
-              className='truncate rounded-lg px-2.5 py-1.5 text-[13px] text-(--text-muted)'
-            >
-              {session}
+            <div key={session.id} className='group relative'>
+              <button
+                className='w-full truncate rounded-lg px-2.5 py-1.5 text-left text-[13px] text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
+                onClick={() => onSelectSession(session.id)}
+                type='button'
+              >
+                {session.title}
+              </button>
+              <div className='pointer-events-none invisible absolute right-0 bottom-[calc(100%+6px)] z-30 w-72 rounded-xl border border-(--border-soft) bg-(--surface-base) p-2 opacity-0 shadow-(--shadow-floating) transition-all duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100'>
+                {session.unitTitles.length > 0 ? (
+                  <p className='break-words text-[11px] text-(--text-muted)'>
+                    Units: {session.unitTitles.join(", ")}
+                  </p>
+                ) : null}
+                {session.noteTitles.length > 0 ? (
+                  <p className='mt-1 break-words text-[11px] text-(--text-muted)'>
+                    Notes: {session.noteTitles.join(", ")}
+                  </p>
+                ) : null}
+                {session.pdfTitles.length > 0 ? (
+                  <p className='mt-1 break-words text-[11px] text-(--text-muted)'>
+                    PDFs: {session.pdfTitles.join(", ")}
+                  </p>
+                ) : null}
+              </div>
             </div>
           ))}
         </div>

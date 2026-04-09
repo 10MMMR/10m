@@ -26,6 +26,10 @@ import {
   serializeNoteDocumentForComparison,
   type NoteDocument,
 } from "@/lib/note-document";
+import {
+  SupabaseNoteSessionRepository,
+  type NoteSession,
+} from "@/lib/supabase-note-session-repository";
 import { SupabaseTreeRepository } from "@/lib/supabase-tree-repository";
 import {
   clearTreeUiState,
@@ -155,14 +159,109 @@ type RateLimitedAction =
 
 type AuthStatus = "loading" | "signed-out" | "signed-in" | "unavailable";
 
+type GenerationSourceSnapshot = {
+  noteTitles: string[];
+  pdfTitles: string[];
+  unitTitles: string[];
+};
+
 function getSelectableFiles(nodes: TreeNode[], selectedIds: string[]) {
-  const selectedIdSet = new Set(selectedIds);
+  const childrenByParent = new Map<string, TreeNode[]>();
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const sourceIds = new Set<string>();
+
+  nodes.forEach((node) => {
+    if (!node.parentId) {
+      return;
+    }
+
+    const children = childrenByParent.get(node.parentId) ?? [];
+    children.push(node);
+    childrenByParent.set(node.parentId, children);
+  });
+
+  const collectDescendants = (nodeId: string) => {
+    const stack = [...(childrenByParent.get(nodeId) ?? [])];
+
+    while (stack.length > 0) {
+      const node = stack.pop();
+
+      if (!node) {
+        continue;
+      }
+
+      if (node.kind === "note" || node.kind === "file") {
+        sourceIds.add(node.id);
+      }
+
+      const children = childrenByParent.get(node.id);
+
+      if (children?.length) {
+        stack.push(...children);
+      }
+    }
+  };
+
+  selectedIds.forEach((selectedId) => {
+    const node = nodeById.get(selectedId);
+
+    if (!node) {
+      return;
+    }
+
+    if (node.kind === "note" || node.kind === "file") {
+      sourceIds.add(node.id);
+      return;
+    }
+
+    if (node.kind === "folder" || node.kind === "root") {
+      collectDescendants(node.id);
+    }
+  });
 
   return nodes.filter(
-    (node) =>
-      selectedIdSet.has(node.id) &&
-      (node.kind === "note" || node.kind === "file"),
+    (node) => sourceIds.has(node.id) && (node.kind === "note" || node.kind === "file"),
   );
+}
+
+function buildGenerationSourceSnapshot(nodes: TreeNode[], selectedIds: string[]) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const sourceNodes = getSelectableFiles(nodes, selectedIds);
+  const unitTitles: string[] = [];
+  const seenUnitTitles = new Set<string>();
+
+  selectedIds.forEach((selectedId) => {
+    const node = nodeById.get(selectedId);
+
+    if (!node || node.kind !== "folder") {
+      return;
+    }
+
+    const nextTitle = node.title.trim();
+
+    if (!nextTitle || seenUnitTitles.has(nextTitle)) {
+      return;
+    }
+
+    seenUnitTitles.add(nextTitle);
+    unitTitles.push(nextTitle);
+  });
+
+  const noteTitles = sourceNodes
+    .filter((node) => node.kind === "note")
+    .map((node) => node.title);
+  const pdfTitles = sourceNodes
+    .filter((node) => node.kind === "file")
+    .map((node) => node.title);
+
+  return {
+    sourceNodes,
+    snapshot: {
+      noteTitles,
+      pdfTitles,
+      unitTitles,
+    } satisfies GenerationSourceSnapshot,
+  };
 }
 
 function formatMessageTime(date: Date) {
@@ -234,6 +333,14 @@ function isNoteGenerationError(value: unknown): value is NoteGenerationError {
 
   const kind = Reflect.get(value, "kind");
   return kind === "error" || kind === "rate_limited";
+}
+
+function isSessionTableUnavailableError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.message.includes("editor_note_sessions");
 }
 
 function mapNoteDocument(
@@ -363,6 +470,85 @@ function collectAncestorIds(nodes: TreeNode[], nodeId: string) {
   return expandedAncestorIds;
 }
 
+function collectNodeAndDescendantIds(nodes: TreeNode[], nodeId: string) {
+  const childrenByParent = new Map<string, string[]>();
+
+  nodes.forEach((node) => {
+    if (!node.parentId) {
+      return;
+    }
+
+    const children = childrenByParent.get(node.parentId) ?? [];
+    children.push(node.id);
+    childrenByParent.set(node.parentId, children);
+  });
+
+  const ids = new Set<string>([nodeId]);
+  const stack = [...(childrenByParent.get(nodeId) ?? [])];
+
+  while (stack.length > 0) {
+    const childId = stack.pop();
+
+    if (!childId) {
+      continue;
+    }
+
+    ids.add(childId);
+    const children = childrenByParent.get(childId);
+
+    if (children?.length) {
+      stack.push(...children);
+    }
+  }
+
+  return ids;
+}
+
+function expandSelectionWithDescendants(nodes: TreeNode[], selectedIds: string[]) {
+  const childrenByParent = new Map<string, string[]>();
+  const allNodeIds = new Set(nodes.map((node) => node.id));
+  const expandedIds: string[] = [];
+  const seenIds = new Set<string>();
+
+  nodes.forEach((node) => {
+    if (!node.parentId) {
+      return;
+    }
+
+    const children = childrenByParent.get(node.parentId) ?? [];
+    children.push(node.id);
+    childrenByParent.set(node.parentId, children);
+  });
+
+  const appendWithDescendants = (nodeId: string) => {
+    if (!allNodeIds.has(nodeId)) {
+      return;
+    }
+
+    const stack = [nodeId];
+
+    while (stack.length > 0) {
+      const currentId = stack.pop();
+
+      if (!currentId || seenIds.has(currentId)) {
+        continue;
+      }
+
+      seenIds.add(currentId);
+      expandedIds.push(currentId);
+      const children = childrenByParent.get(currentId);
+
+      if (children?.length) {
+        stack.push(...children);
+      }
+    }
+  };
+
+  selectedIds.forEach((nodeId) => appendWithDescendants(nodeId));
+
+  return expandedIds;
+}
+
 function collectCascadeDeleteIds(nodes: TreeNode[], nodeIds: string[]) {
   const selectedIds = new Set(nodeIds);
   const directDeleteIds = nodeIds.filter((nodeId) => {
@@ -435,6 +621,9 @@ export function WorkspaceShell({
   const treeRepository = useRef<SupabaseTreeRepository | null>(
     supabase ? new SupabaseTreeRepository(supabase) : null,
   );
+  const noteSessionRepository = useRef<SupabaseNoteSessionRepository | null>(
+    supabase ? new SupabaseNoteSessionRepository(supabase) : null,
+  );
   const chatAbortControllerRef = useRef<AbortController | null>(null);
   const pdfUploadInputRef = useRef<HTMLInputElement>(null);
   const treeNodesRef = useRef<TreeNode[]>([]);
@@ -457,6 +646,7 @@ export function WorkspaceShell({
   const [isDirty, setIsDirty] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] =
     useState<DeleteConfirmationState | null>(null);
+  const [noteSessions, setNoteSessions] = useState<NoteSession[]>([]);
   const [chatSessions, setChatSessions] = useState<Record<string, Message[]>>(
     {},
   );
@@ -504,6 +694,21 @@ export function WorkspaceShell({
   const rootNode = useMemo(
     () => treeNodes.find((node) => node.kind === "root") ?? null,
     [treeNodes],
+  );
+  const sessionById = useMemo(
+    () => new Map(noteSessions.map((session) => [session.id, session])),
+    [noteSessions],
+  );
+  const sessionNoteNodeIds = useMemo(
+    () => new Set(noteSessions.map((session) => session.noteNodeId)),
+    [noteSessions],
+  );
+  const visibleTreeNodes = useMemo(
+    () =>
+      treeNodes.filter(
+        (node) => !(node.kind === "note" && sessionNoteNodeIds.has(node.id)),
+      ),
+    [sessionNoteNodeIds, treeNodes],
   );
 
   const activeEditorNote = selectedNodeKind === "note" ? draftNoteNode : null;
@@ -578,6 +783,7 @@ export function WorkspaceShell({
 
   const resetWorkspaceState = useCallback(() => {
     setTreeNodes([]);
+    setNoteSessions([]);
     setSelectedNodeIds([]);
     setSelectedNodeId(null);
     setSelectedNodeKind(null);
@@ -594,16 +800,30 @@ export function WorkspaceShell({
   }, []);
 
   const refreshTree = useCallback(async () => {
-    if (!treeRepository.current || !authUser) {
+    if (!treeRepository.current || !noteSessionRepository.current || !authUser) {
       resetWorkspaceState();
-      return [];
+      return {
+        nodes: [],
+        sessions: [],
+      };
     }
-    const nodes = await treeRepository.current.listTreeByClass(classId, {
-      includeNoteContent: false,
-    });
+
+    const [nodes, sessions] = await Promise.all([
+      treeRepository.current.listTreeByClass(classId, {
+        includeNoteContent: false,
+      }),
+      noteSessionRepository.current.listByClass(classId).catch((error) => {
+        if (isSessionTableUnavailableError(error)) {
+          return [] as NoteSession[];
+        }
+
+        throw error;
+      }),
+    ]);
     setTreeNodes(nodes);
+    setNoteSessions(sessions);
     treeNodesRef.current = nodes;
-    return nodes;
+    return { nodes, sessions };
   }, [authUser, classId, resetWorkspaceState]);
 
   const getAccessToken = useCallback(async () => {
@@ -948,7 +1168,7 @@ export function WorkspaceShell({
     setChatSessions({});
     setChatInput("");
     setIsChatStreaming(false);
-  }, [classId, resetWorkspaceState, workspace.messages]);
+  }, [classId, resetWorkspaceState]);
 
   useEffect(() => {
     chatAbortControllerRef.current?.abort();
@@ -1203,25 +1423,31 @@ export function WorkspaceShell({
     }
 
     if (options.mode === "single") {
-      syncSelectionState(treeNodes, [node.id], node.id);
+      const nextSelectedIds = expandSelectionWithDescendants(treeNodes, [node.id]);
+      syncSelectionState(treeNodes, nextSelectedIds, node.id);
       setSelectionAnchorId(node.id);
       return;
     }
 
     if (options.mode === "toggle") {
       const isSelected = selectedNodeIds.includes(node.id);
+      const nodeTreeIds = collectNodeAndDescendantIds(treeNodes, node.id);
       const nextSelectedIds = isSelected
-        ? selectedNodeIds.filter((id) => id !== node.id)
+        ? selectedNodeIds.filter((id) => !nodeTreeIds.has(id))
         : [...selectedNodeIds, node.id];
+      const expandedSelectedIds = expandSelectionWithDescendants(
+        treeNodes,
+        nextSelectedIds,
+      );
       const nextActiveId = isSelected
         ? selectedNodeId === node.id
-          ? (nextSelectedIds.at(-1) ?? null)
+          ? (expandedSelectedIds.at(-1) ?? null)
           : selectedNodeId
         : selectedNodeId && selectedNodeIds.includes(selectedNodeId)
           ? selectedNodeId
           : node.id;
 
-      syncSelectionState(treeNodes, nextSelectedIds, nextActiveId);
+      syncSelectionState(treeNodes, expandedSelectedIds, nextActiveId);
       setSelectionAnchorId(node.id);
       return;
     }
@@ -1238,7 +1464,10 @@ export function WorkspaceShell({
 
     const start = Math.min(anchorIndex, nodeIndex);
     const end = Math.max(anchorIndex, nodeIndex);
-    const nextSelectedIds = options.orderedNodeIds.slice(start, end + 1);
+    const nextSelectedIds = expandSelectionWithDescendants(
+      treeNodes,
+      options.orderedNodeIds.slice(start, end + 1),
+    );
     const nextActiveId =
       selectedNodeId && nextSelectedIds.includes(selectedNodeId)
         ? selectedNodeId
@@ -1282,6 +1511,50 @@ export function WorkspaceShell({
       return savedNodes.find((item) => item.id === noteToPersist.id) ?? noteToPersist;
     },
     [persistTree, syncSelectionState],
+  );
+
+  const upsertNoteSession = useCallback(
+    async ({
+      noteNode,
+      snapshot,
+    }: {
+      noteNode: TreeNode;
+      snapshot: GenerationSourceSnapshot;
+    }) => {
+      if (!noteSessionRepository.current || noteNode.kind !== "note") {
+        return null;
+      }
+
+      let session: NoteSession;
+
+      try {
+        session = await noteSessionRepository.current.upsertByNoteNode({
+          classId,
+          noteNodeId: noteNode.id,
+          noteTitles: snapshot.noteTitles,
+          pdfTitles: snapshot.pdfTitles,
+          title: noteNode.title,
+          unitTitles: snapshot.unitTitles,
+        });
+      } catch (error) {
+        if (isSessionTableUnavailableError(error)) {
+          return null;
+        }
+
+        throw error;
+      }
+
+      setNoteSessions((current) => {
+        const next = [session, ...current.filter((item) => item.id !== session.id)];
+        return next.sort(
+          (left, right) =>
+            new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+        );
+      });
+
+      return session;
+    },
+    [classId],
   );
 
   const createNoteUnderParent = async (
@@ -1418,6 +1691,7 @@ export function WorkspaceShell({
     chatContextId,
     mode,
     prompt,
+    sourceSnapshot,
     sourceNodes,
     targetNoteId,
     title,
@@ -1425,6 +1699,7 @@ export function WorkspaceShell({
     chatContextId?: string;
     mode: "new_note" | "overwrite_note";
     prompt: string;
+    sourceSnapshot: GenerationSourceSnapshot;
     sourceNodes: TreeNode[];
     targetNoteId?: string;
     title?: string;
@@ -1472,35 +1747,21 @@ export function WorkspaceShell({
     }
 
     let effectiveMode = mode;
-    let targetNode: TreeNode | null =
+    const overwriteTargetNode =
       effectiveMode === "overwrite_note" && targetNoteId
         ? (treeNodesRef.current.find((node) => node.id === targetNoteId) ??
           null)
         : null;
-    let targetContextId = targetNode?.id ?? chatContextId;
+    let targetContextId = overwriteTargetNode?.id ?? chatContextId;
 
     const fallbackTitle =
-      targetNode?.kind === "note" && !title
-        ? targetNode.title
+      overwriteTargetNode?.kind === "note" && !title
+        ? overwriteTargetNode.title
         : buildGeneratedNoteTitle(sourceNodes, title);
 
-    if (!targetNode || targetNode.kind !== "note") {
+    if (!overwriteTargetNode || overwriteTargetNode.kind !== "note") {
       effectiveMode = "new_note";
-      targetNode = (await createNoteUnderParent(rootNode.id, {
-        markDirty: false,
-        title: fallbackTitle,
-      })) ?? null;
-
-      if (!targetNode || targetNode.kind !== "note") {
-        throw createNoteGenerationError({
-          kind: "error",
-          message: "Unable to create a note for AI generation.",
-          targetContextId: chatContextId,
-        });
-      }
     }
-
-    targetContextId = targetNode.id;
 
     const response = await fetch("/api/notes/generate", {
       method: "POST",
@@ -1518,7 +1779,12 @@ export function WorkspaceShell({
         mode: effectiveMode,
         prompt,
         sourceNodeIds: sourceNodes.map((node) => node.id),
-        targetNoteId: targetNode.id,
+        targetNoteId:
+          effectiveMode === "overwrite_note" &&
+            overwriteTargetNode &&
+            overwriteTargetNode.kind === "note"
+            ? overwriteTargetNode.id
+            : undefined,
         title: fallbackTitle,
       }),
     });
@@ -1558,13 +1824,43 @@ export function WorkspaceShell({
       });
     }
 
+    let targetNode = overwriteTargetNode;
+
+    if (effectiveMode === "new_note" || !targetNode || targetNode.kind !== "note") {
+      targetNode = (await createNoteUnderParent(rootNode.id, {
+        markDirty: false,
+        title: fallbackTitle,
+      })) ?? null;
+
+      if (!targetNode || targetNode.kind !== "note") {
+        throw createNoteGenerationError({
+          kind: "error",
+          message: "Unable to create a note for AI generation.",
+          targetContextId: chatContextId,
+        });
+      }
+    }
+
+    targetContextId = targetNode.id;
+
     const completedNode = buildUpdatedNote(targetNode, {
       contentJson: parseNoteDocument(payload.contentJson),
       title: payload.title?.trim() || fallbackTitle,
     });
 
-    await persistNoteNode(completedNode);
-    return completedNode;
+    const savedNode = await persistNoteNode(completedNode);
+    const isSessionNote = sessionNoteNodeIds.has(savedNode.id);
+    const shouldUpsertSession =
+      effectiveMode === "new_note" || (effectiveMode === "overwrite_note" && isSessionNote);
+
+    if (shouldUpsertSession) {
+      await upsertNoteSession({
+        noteNode: savedNode,
+        snapshot: sourceSnapshot,
+      });
+    }
+
+    return savedNode;
   };
 
   const handleMenuAction = async (nodeId: string, action: TreeMenuAction) => {
@@ -1589,7 +1885,7 @@ export function WorkspaceShell({
       const selectedIds = selectedNodeIds.includes(node.id)
         ? selectedNodeIds
         : [node.id];
-      const selectedSources = getSelectableFiles(
+      const { sourceNodes: selectedSources, snapshot } = buildGenerationSourceSnapshot(
         treeNodesRef.current,
         selectedIds,
       );
@@ -1604,6 +1900,7 @@ export function WorkspaceShell({
           mode: "new_note",
           prompt:
             "Create a premium-quality study note from the selected sources. Be concise, highly structured, exam-focused, and use tables or lists where they add clarity.",
+          sourceSnapshot: snapshot,
           sourceNodes: selectedSources,
           title: buildGeneratedNoteTitle(selectedSources),
         });
@@ -2205,9 +2502,10 @@ export function WorkspaceShell({
         return;
       }
 
-      const sourceNodes = getSelectableFiles(treeNodesRef.current, [
-        sourceContextId,
-      ]);
+      const { sourceNodes, snapshot } = buildGenerationSourceSnapshot(
+        treeNodesRef.current,
+        [sourceContextId],
+      );
 
       if (sourceNodes.length === 0) {
         throw new Error("No note or PDF is available for note generation.");
@@ -2221,6 +2519,7 @@ export function WorkspaceShell({
         chatContextId: sourceContextId,
         mode: shouldOverwriteCurrent ? "overwrite_note" : "new_note",
         prompt: payload.assistant.prompt,
+        sourceSnapshot: snapshot,
         sourceNodes,
         targetNoteId: shouldOverwriteCurrent ? sourceContextId : undefined,
         title: payload.assistant.title,
@@ -2301,6 +2600,36 @@ export function WorkspaceShell({
     setUploadFeedback(null);
   };
 
+  const handleSelectSession = (sessionId: string) => {
+    const session = sessionById.get(sessionId);
+
+    if (!session) {
+      return;
+    }
+
+    const targetNode = treeNodesRef.current.find(
+      (node) => node.id === session.noteNodeId && node.kind === "note",
+    );
+
+    if (!targetNode) {
+      return;
+    }
+
+    syncSelectionState(treeNodesRef.current, [targetNode.id], targetNode.id);
+    setSelectionAnchorId(targetNode.id);
+  };
+
+  const handleClearSelectionToActive = () => {
+    if (!selectedNodeId) {
+      syncSelectionState(treeNodesRef.current, [], null);
+      setSelectionAnchorId(null);
+      return;
+    }
+
+    syncSelectionState(treeNodesRef.current, [selectedNodeId], selectedNodeId);
+    setSelectionAnchorId(selectedNodeId);
+  };
+
   return (
     <main className='workspace-shell flex h-screen flex-col overflow-hidden'>
       <FloatingPopupBanner
@@ -2334,13 +2663,15 @@ export function WorkspaceShell({
           collapsed={isLeftPaneCollapsed}
           onCollapse={() => setIsLeftPaneCollapsed(true)}
           onExpand={() => setIsLeftPaneCollapsed(false)}
-          treeNodes={treeNodes}
+          treeNodes={visibleTreeNodes}
           expandedIds={expandedIds}
           selectedNodeIds={selectedNodeIds}
           selectedNodeId={selectedNodeId}
           classLabel={workspace.classLabel}
-          sessions={workspace.sessions}
+          sessions={noteSessions}
+          onSelectSession={handleSelectSession}
           onSelectNode={handleSelectNode}
+          onClearSelectionToActive={handleClearSelectionToActive}
           onCreateFolder={handleCreateFolder}
           onAddAction={handleAddAction}
           onMenuAction={handleMenuAction}

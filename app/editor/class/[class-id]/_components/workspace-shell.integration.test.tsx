@@ -1405,6 +1405,7 @@ describe("WorkspaceShell note flow", () => {
     renderWorkspace();
 
     await createRootNote();
+    const noteRowsBefore = fakeSupabase.__treeRows.filter((row) => row.kind === "note").length;
 
     nextAssistantCommand = {
       action: "generate_note",
@@ -1428,6 +1429,9 @@ describe("WorkspaceShell note flow", () => {
     );
     expect(screen.getByTestId("workspace-feedback")).toHaveTextContent(
       "Too many note-generation requests. Please try again shortly. Try again in 12s.",
+    );
+    expect(fakeSupabase.__treeRows.filter((row) => row.kind === "note")).toHaveLength(
+      noteRowsBefore,
     );
   });
 

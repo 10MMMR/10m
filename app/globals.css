@@ -33,6 +33,7 @@
 
   --main: var(--primary);
   --main-deep: #44523b;
+  --note-indicator: #789b67;
   --secondary-deep: #a97549;
   --secondary-strong: #94653e;
   --text-main: var(--foreground);
@@ -113,6 +114,7 @@
 
   --main: var(--primary);
   --main-deep: #ea580c;
+  --note-indicator: #ffad5a;
   --secondary-deep: #c2410c;
   --secondary-strong: #f97316;
   --text-main: #ffffff;

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SiteLogo } from "./site-logo";
 
-const navbarVisibleRoutes = ["/", "/waitlist"];
+const navbarVisibleRoutes = ["/", "/waitlist", "/login", "/signup"];
 
 function normalizePath(pathname: string) {
   if (pathname.length > 1 && pathname.endsWith("/")) {
@@ -52,7 +52,7 @@ export function SiteNavbar() {
         </div>
 
         <Link
-          href="/waitlist"
+          href="/app"
           className="organic-button organic-button-primary h-11 cursor-pointer px-6 py-0 text-sm"
         >
           Start Now

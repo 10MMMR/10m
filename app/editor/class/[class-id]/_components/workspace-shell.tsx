@@ -49,6 +49,13 @@ import {
   type TreeNodeKind,
   updateNodeInTree,
 } from "@/lib/tree-repository";
+import {
+  formatRetryDelay,
+  parseRateLimit,
+  parseSampledResponse,
+  type ClientRateLimitState,
+} from "@/lib/api/client-rate-limit";
+import { FloatingPopupBanner } from "@/app/_components/floating-popup-banner";
 
 import { supabase } from "../../../../_global/authentication/supabaseClient";
 
@@ -85,6 +92,16 @@ type UploadPdfResponse = {
   tree?: TreeNode[];
 };
 
+type UploadImageResponse = {
+  error?: string;
+  fileName?: string;
+  mimeType?: string;
+  signedUrl?: string;
+  storagePath?: string;
+};
+
+const IMAGE_SIGNED_URL_TTL_SECONDS = 60 * 5;
+
 type DeletePdfResponse = {
   error?: string;
   orphanedPaths?: string[];
@@ -107,10 +124,16 @@ type ChatRequestMessage = {
   content: string;
 };
 
+type InvalidNoteDocumentLogPayload = {
+  classId: string;
+  error: string;
+  noteId: string;
+};
+
 type DraftNoteContext = {
   nodeId: string;
   title: string;
-  body: string;
+  contentJson: NoteDocument;
 };
 
 type ChatResponse = {
@@ -119,10 +142,26 @@ type ChatResponse = {
 };
 
 type GenerateNoteResponse = {
+  contentJson?: NoteDocument;
   error?: string;
-  html?: string;
   title?: string;
 };
+
+type NoteGenerationErrorKind = "error" | "rate_limited";
+
+type NoteGenerationError = Error & {
+  kind: NoteGenerationErrorKind;
+  retryInSeconds?: number;
+  targetContextId?: string;
+};
+
+type RateLimitedAction =
+  | "chat"
+  | "deletePdf"
+  | "invalidDocLog"
+  | "noteGeneration"
+  | "uploadImage"
+  | "uploadPdf";
 
 type AuthStatus = "loading" | "signed-out" | "signed-in" | "unavailable";
 
@@ -187,15 +226,11 @@ function getSelectableFiles(nodes: TreeNode[], selectedIds: string[]) {
   });
 
   return nodes.filter(
-    (node) =>
-      sourceIds.has(node.id) && (node.kind === "note" || node.kind === "file"),
+    (node) => sourceIds.has(node.id) && (node.kind === "note" || node.kind === "file"),
   );
 }
 
-function buildGenerationSourceSnapshot(
-  nodes: TreeNode[],
-  selectedIds: string[],
-) {
+function buildGenerationSourceSnapshot(nodes: TreeNode[], selectedIds: string[]) {
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const sourceNodes = getSelectableFiles(nodes, selectedIds);
   const unitTitles: string[] = [];
@@ -258,7 +293,7 @@ function createMessage(
 function toChatRequestMessages(messages: Message[]): ChatRequestMessage[] {
   return messages
     .map((message) => ({
-      role: message.side === "assistant" ? "assistant" : "user",
+      role: (message.side === "assistant" ? "assistant" : "user") as ChatRequestMessage["role"],
       content: message.text.trim(),
     }))
     .filter((message) => message.content.length > 0);
@@ -266,12 +301,16 @@ function toChatRequestMessages(messages: Message[]): ChatRequestMessage[] {
 
 function buildUpdatedNote(
   node: TreeNode,
-  updates: Partial<Pick<TreeNode, "title" | "body">>,
+  updates: Partial<Pick<TreeNode, "contentJson" | "title">>,
+  options?: {
+    touchUpdatedAt?: boolean;
+  },
 ) {
   return {
     ...node,
     ...updates,
-    updatedAt: new Date().toISOString(),
+    updatedAt:
+      options?.touchUpdatedAt === false ? node.updatedAt : new Date().toISOString(),
   };
 }
 
@@ -320,9 +359,7 @@ function mapNoteDocument(
     return nextNode;
   }
 
-  const nextContent = nextNode.content.map((child) =>
-    mapNoteDocument(child, mapper),
-  );
+  const nextContent = nextNode.content.map((child) => mapNoteDocument(child, mapper));
 
   return {
     ...nextNode,
@@ -473,10 +510,7 @@ function collectNodeAndDescendantIds(nodes: TreeNode[], nodeId: string) {
   return ids;
 }
 
-function expandSelectionWithDescendants(
-  nodes: TreeNode[],
-  selectedIds: string[],
-) {
+function expandSelectionWithDescendants(nodes: TreeNode[], selectedIds: string[]) {
   const childrenByParent = new Map<string, string[]>();
   const allNodeIds = new Set(nodes.map((node) => node.id));
   const expandedIds: string[] = [];
@@ -584,30 +618,12 @@ function buildGeneratedNoteTitle(
   return `Study Notes - ${firstNode.title} + ${sourceNodes.length - 1} more`;
 }
 
-function buildGeneratingNoteHtml() {
-  return "<p><strong>Generating study notes...</strong></p><p>StudyAI is building a structured note from the selected material.</p>";
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function buildGenerationFailureHtml(message: string) {
-  return `<p><strong>Unable to generate note.</strong></p><p>${escapeHtml(message)}</p>`;
-}
-
 export function WorkspaceShell({
   classId,
   imageStorageBucket,
   pdfStorageBucket,
 }: WorkspaceShellProps) {
   const workspace = getWorkspaceSeed(classId);
-  // const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const treeRepository = useRef<SupabaseTreeRepository | null>(
     supabase ? new SupabaseTreeRepository(supabase) : null,
   );
@@ -639,8 +655,7 @@ export function WorkspaceShell({
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] =
     useState<SessionDeleteConfirmationState | null>(null);
   const [noteSessions, setNoteSessions] = useState<NoteSession[]>([]);
-  const [isSessionStorageAvailable, setIsSessionStorageAvailable] =
-    useState(true);
+  const [isSessionStorageAvailable, setIsSessionStorageAvailable] = useState(true);
   const [chatSessions, setChatSessions] = useState<Record<string, Message[]>>(
     {},
   );
@@ -650,16 +665,22 @@ export function WorkspaceShell({
     null,
   );
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [isUploadProgressDismissed, setIsUploadProgressDismissed] = useState(false);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(
     supabase ? "loading" : "unavailable",
   );
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [selectedPdfUrl, setSelectedPdfUrl] = useState<string | null>(null);
+  const [isLoadingSelectedNote, setIsLoadingSelectedNote] = useState(false);
   const pendingSignInUiResetUserIdRef = useRef<string | null>(null);
   const restoredTreeUiStateKeyRef = useRef<string | null>(null);
   const [pendingUploadParentId, setPendingUploadParentId] = useState<
     string | null
   >(null);
+  const [actionCooldowns, setActionCooldowns] = useState<
+    Partial<Record<RateLimitedAction, number>>
+  >({});
+  const [cooldownTick, setCooldownTick] = useState(0);
 
   const desktopGridColumns = isLeftPaneCollapsed
     ? isChatOpen
@@ -736,9 +757,38 @@ export function WorkspaceShell({
     return {
       nodeId: draftNoteNode.id,
       title: draftNoteNode.title,
-      body: draftNoteNode.body || "<p></p>",
+      contentJson: draftNoteNode.contentJson ?? EMPTY_NOTE_DOCUMENT,
     } satisfies DraftNoteContext;
   }, [draftNoteNode]);
+  const draftNoteId = draftNoteNode?.kind === "note" ? draftNoteNode.id : null;
+  const draftNoteImageStoragePaths = useMemo(() => {
+    if (!draftNoteNode || draftNoteNode.kind !== "note") {
+      return [];
+    }
+
+    return collectImageStoragePaths(draftNoteNode.contentJson ?? EMPTY_NOTE_DOCUMENT);
+  }, [draftNoteNode]);
+  const draftNoteImageStoragePathKey = useMemo(
+    () => draftNoteImageStoragePaths.join("|"),
+    [draftNoteImageStoragePaths],
+  );
+  const draftNoteImageStoragePathsRef = useRef(draftNoteImageStoragePaths);
+
+  useEffect(() => {
+    const hasActiveCooldown = Object.values(actionCooldowns).some(
+      (retryAtMs) => Boolean(retryAtMs && retryAtMs > Date.now()),
+    );
+
+    if (!hasActiveCooldown) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setCooldownTick((current) => current + 1);
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [actionCooldowns]);
 
   const resetWorkspaceState = useCallback(() => {
     setTreeNodes([]);
@@ -749,20 +799,18 @@ export function WorkspaceShell({
     setSelectedNodeKind(null);
     setSelectionAnchorId(null);
     setDraftNoteNode(null);
+    setIsLoadingSelectedNote(false);
     setExpandedIds(new Set());
     setSelectedPdfUrl(null);
     setIsDirty(false);
     setUploadFeedback(null);
     setIsUploadingPdf(false);
+    setIsUploadProgressDismissed(false);
     setPendingUploadParentId(null);
   }, []);
 
   const refreshTree = useCallback(async () => {
-    if (
-      !treeRepository.current ||
-      !noteSessionRepository.current ||
-      !authUser
-    ) {
+    if (!treeRepository.current || !noteSessionRepository.current || !authUser) {
       resetWorkspaceState();
       return {
         nodes: [],
@@ -789,10 +837,7 @@ export function WorkspaceShell({
 
         throw error;
       });
-    const [nodes, sessionResult] = await Promise.all([
-      nodesPromise,
-      sessionsPromise,
-    ]);
+    const [nodes, sessionResult] = await Promise.all([nodesPromise, sessionsPromise]);
     const sessions = sessionResult.sessions;
 
     setTreeNodes(nodes);
@@ -801,6 +846,98 @@ export function WorkspaceShell({
     treeNodesRef.current = nodes;
     return { nodes, sessions };
   }, [authUser, classId, resetWorkspaceState]);
+
+  const getAccessToken = useCallback(async () => {
+    if (!supabase) {
+      return null;
+    }
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    return session?.access_token ?? null;
+  }, []);
+
+  const setCooldown = useCallback(
+    (action: RateLimitedAction, state: ClientRateLimitState) => {
+      if (!state.isRateLimited) {
+        return;
+      }
+
+      setActionCooldowns((current) => ({
+        ...current,
+        [action]: state.retryAtMs,
+      }));
+    },
+    [],
+  );
+
+  const getRemainingCooldown = useCallback(
+    (action: RateLimitedAction) => {
+      const now = Date.now() + cooldownTick * 0;
+      const retryAtMs = actionCooldowns[action] ?? 0;
+
+      if (retryAtMs <= 0) {
+        return 0;
+      }
+
+      return Math.max(0, Math.ceil((retryAtMs - now) / 1000));
+    },
+    [actionCooldowns, cooldownTick],
+  );
+
+  const isCoolingDown = useCallback(
+    (action: RateLimitedAction) => getRemainingCooldown(action) > 0,
+    [getRemainingCooldown],
+  );
+
+  const logInvalidNoteDocument = useCallback(async ({
+    classId,
+    error,
+    noteId,
+  }: InvalidNoteDocumentLogPayload) => {
+    try {
+      if (isCoolingDown("invalidDocLog")) {
+        return;
+      }
+
+      const accessToken = await getAccessToken();
+
+      if (!accessToken) {
+        return;
+      }
+
+      const response = await fetch("/api/editor/log-invalid-document", {
+        body: JSON.stringify({
+          classId,
+          error,
+          noteId,
+        }),
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+      const payload = await response.json().catch(() => null);
+
+      if (parseSampledResponse(response, payload)) {
+        return;
+      }
+
+      const rateLimit = parseRateLimit(
+        response,
+        "Too many invalid-document logs. Please wait before retrying.",
+      );
+
+      if (rateLimit.isRateLimited) {
+        setCooldown("invalidDocLog", rateLimit);
+      }
+    } catch {
+      // Logging should never block the editor from loading.
+    }
+  }, [getAccessToken, isCoolingDown, setCooldown]);
 
   const persistTree = useCallback(
     async (nextNodes: TreeNode[]) => {
@@ -818,18 +955,6 @@ export function WorkspaceShell({
     },
     [authUser, classId],
   );
-
-  // const getAccessToken = useCallback(async () => {
-  //   if (!supabase) {
-  //     return null;
-  //   }
-
-  //   const {
-  //     data: { session },
-  //   } = await supabase.auth.getSession();
-
-  //   return session?.access_token ?? null;
-  // }, [supabase]);
 
   const syncSelectionState = useCallback(
     (
@@ -856,7 +981,6 @@ export function WorkspaceShell({
       if (activeNode?.kind === "note") {
         setDraftNoteNode({
           ...activeNode,
-          body: activeNode.body || "<p></p>",
         });
       } else {
         setDraftNoteNode(null);
@@ -866,6 +990,83 @@ export function WorkspaceShell({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!treeRepository.current || selectedNodeKind !== "note" || !selectedNodeId) {
+      setIsLoadingSelectedNote(false);
+      return;
+    }
+
+    const selectedNote = treeNodes.find((node) => node.id === selectedNodeId);
+
+    if (!selectedNote || selectedNote.kind !== "note") {
+      setIsLoadingSelectedNote(false);
+      return;
+    }
+
+    if (selectedNote.contentJson !== undefined) {
+      setIsLoadingSelectedNote(false);
+      return;
+    }
+
+    if (!selectedNote.noteId) {
+      setIsLoadingSelectedNote(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingSelectedNote(true);
+
+    void treeRepository.current.loadNoteById(classId, selectedNote.noteId, {
+      onInvalidNoteDocument: logInvalidNoteDocument,
+    }).then((loadedNote) => {
+      if (cancelled) {
+        return;
+      }
+
+      if (!loadedNote?.content_json) {
+        throw new Error("Unable to load note.");
+      }
+
+      const hydratedNote: TreeNode = {
+        ...selectedNote,
+        contentJson: loadedNote.content_json,
+        createdAt: loadedNote.created_at,
+        title: loadedNote.title,
+        updatedAt: loadedNote.updated_at,
+      };
+
+      setTreeNodes((current) => {
+        const nextNodes = updateNodeInTree(current, hydratedNote);
+        treeNodesRef.current = nextNodes;
+        return nextNodes;
+      });
+      setDraftNoteNode((current) =>
+        current?.kind === "note" && current.id === hydratedNote.id ? hydratedNote : current,
+      );
+      setIsLoadingSelectedNote(false);
+    }).catch((error) => {
+      if (cancelled) {
+        return;
+      }
+
+      setIsLoadingSelectedNote(false);
+      setUploadFeedback({
+        type: "error",
+        message: error instanceof Error ? error.message : "Unable to load note.",
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    classId,
+    logInvalidNoteDocument,
+    selectedNodeId,
+    selectedNodeKind,
+    treeNodes,
+  ]);
 
   const setMessagesForContext = useCallback(
     (contextId: string, nextMessages: Message[]) => {
@@ -1036,7 +1237,7 @@ export function WorkspaceShell({
     );
 
     return () => subscription.unsubscribe();
-  }, [supabase]);
+  }, []);
 
   useEffect(() => {
     if (authStatus !== "signed-in" || !authUser) {
@@ -1116,7 +1317,7 @@ export function WorkspaceShell({
   }, [authStatus, authUser, classId, syncSelectionState, treeNodes]);
 
   useEffect(() => {
-    if (!supabase || !storageBucket || !selectedFileNode?.fileStoragePath) {
+    if (!supabase || !pdfStorageBucket || !selectedFileNode?.fileStoragePath) {
       setSelectedPdfUrl(null);
       return;
     }
@@ -1124,11 +1325,8 @@ export function WorkspaceShell({
     let cancelled = false;
 
     void supabase.storage
-      .from(storageBucket)
-      .createSignedUrl(
-        selectedFileNode.fileStoragePath,
-        PDF_SIGNED_URL_TTL_SECONDS,
-      )
+      .from(pdfStorageBucket)
+      .createSignedUrl(selectedFileNode.fileStoragePath, PDF_SIGNED_URL_TTL_SECONDS)
       .then(({ data, error }) => {
         if (cancelled) {
           return;
@@ -1149,7 +1347,82 @@ export function WorkspaceShell({
     return () => {
       cancelled = true;
     };
-  }, [selectedFileNode, storageBucket, supabase]);
+  }, [pdfStorageBucket, selectedFileNode]);
+
+  useEffect(() => {
+    draftNoteImageStoragePathsRef.current = draftNoteImageStoragePaths;
+  }, [draftNoteImageStoragePathKey, draftNoteImageStoragePaths]);
+
+  useEffect(() => {
+    if (!supabase || !imageStorageBucket || !draftNoteId) {
+      return;
+    }
+
+    const storagePaths = draftNoteImageStoragePathsRef.current;
+
+    if (storagePaths.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void supabase.storage
+      .from(imageStorageBucket)
+      .createSignedUrls(storagePaths, IMAGE_SIGNED_URL_TTL_SECONDS)
+      .then(({ data, error }) => {
+        if (cancelled || error || !data) {
+          return;
+        }
+
+        const signedUrlByPath = new Map<string, string>();
+
+        data.forEach((entry, index) => {
+          const storagePath = storagePaths[index];
+
+          if (storagePath && entry?.signedUrl) {
+            signedUrlByPath.set(storagePath, entry.signedUrl);
+          }
+        });
+
+        if (signedUrlByPath.size === 0) {
+          return;
+        }
+
+        setDraftNoteNode((current) => {
+          if (!current || current.kind !== "note" || current.id !== draftNoteId) {
+            return current;
+          }
+
+          const currentDocument = current.contentJson ?? EMPTY_NOTE_DOCUMENT;
+          const nextDocument = replaceImageSources(currentDocument, signedUrlByPath);
+
+          if (
+            serializeNoteDocumentForComparison(currentDocument) ===
+            serializeNoteDocumentForComparison(nextDocument)
+          ) {
+            return current;
+          }
+
+          return buildUpdatedNote(
+            current,
+            {
+              contentJson: nextDocument,
+            },
+            {
+              touchUpdatedAt: false,
+            },
+          );
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    draftNoteId,
+    draftNoteImageStoragePathKey,
+    imageStorageBucket,
+  ]);
 
   const handleHideChat = () => {
     if (isChatOpen) {
@@ -1171,9 +1444,7 @@ export function WorkspaceShell({
     }
 
     if (options.mode === "single") {
-      const nextSelectedIds = expandSelectionWithDescendants(treeNodes, [
-        node.id,
-      ]);
+      const nextSelectedIds = expandSelectionWithDescendants(treeNodes, [node.id]);
       syncSelectionState(treeNodes, nextSelectedIds, node.id);
       setSelectionAnchorId(node.id);
       return;
@@ -1243,14 +1514,22 @@ export function WorkspaceShell({
 
   const persistNoteNode = useCallback(
     async (node: TreeNode) => {
-      const savedNodes = await persistTree(
-        updateNodeInTree(treeNodesRef.current, node),
-      );
-      syncSelectionState(savedNodes, [node.id], node.id);
-      setSelectionAnchorId(node.id);
+      const noteToPersist =
+        node.kind === "note"
+          ? {
+              ...node,
+              contentJson: sanitizeImageSourcesForPersistence(
+                node.contentJson ?? EMPTY_NOTE_DOCUMENT,
+              ),
+            }
+          : node;
+
+      const savedNodes = await persistTree(updateNodeInTree(treeNodesRef.current, noteToPersist));
+      syncSelectionState(savedNodes, [noteToPersist.id], noteToPersist.id);
+      setSelectionAnchorId(noteToPersist.id);
       setIsDirty(false);
 
-      return savedNodes.find((item) => item.id === node.id) ?? node;
+      return savedNodes.find((item) => item.id === noteToPersist.id) ?? noteToPersist;
     },
     [persistTree, syncSelectionState],
   );
@@ -1290,14 +1569,10 @@ export function WorkspaceShell({
       }
 
       setNoteSessions((current) => {
-        const next = [
-          session,
-          ...current.filter((item) => item.id !== session.id),
-        ];
+        const next = [session, ...current.filter((item) => item.id !== session.id)];
         return next.sort(
           (left, right) =>
-            new Date(right.updatedAt).getTime() -
-            new Date(left.updatedAt).getTime(),
+            new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
         );
       });
 
@@ -1437,7 +1712,7 @@ export function WorkspaceShell({
   };
 
   const generateNoteFromSources = async ({
-    chatSeedMessages,
+    chatContextId,
     mode,
     prompt,
     sourceSnapshot,
@@ -1445,7 +1720,7 @@ export function WorkspaceShell({
     targetNoteId,
     title,
   }: {
-    chatSeedMessages?: Message[];
+    chatContextId?: string;
     mode: "new_note" | "overwrite_note";
     prompt: string;
     sourceSnapshot: GenerationSourceSnapshot;
@@ -1453,18 +1728,46 @@ export function WorkspaceShell({
     targetNoteId?: string;
     title?: string;
   }) => {
+    const generationCooldownSeconds = getRemainingCooldown("noteGeneration");
+
+    if (generationCooldownSeconds > 0) {
+      const cooldownMessage = `Note generation is temporarily rate limited. Try again in ${formatRetryDelay(generationCooldownSeconds)}.`;
+      setUploadFeedback({
+        type: "error",
+        message: cooldownMessage,
+      });
+      throw createNoteGenerationError({
+        kind: "rate_limited",
+        message: cooldownMessage,
+        retryInSeconds: generationCooldownSeconds,
+        targetContextId: chatContextId,
+      });
+    }
+
     if (!supabase || authStatus !== "signed-in") {
-      throw new Error("Sign in with Google to use AI note generation.");
+      throw createNoteGenerationError({
+        kind: "error",
+        message: "Sign in with Google to use AI note generation.",
+        targetContextId: chatContextId,
+      });
     }
 
     if (!rootNode) {
-      throw new Error("Class root is unavailable.");
+      throw createNoteGenerationError({
+        kind: "error",
+        message: "Class root is unavailable.",
+        targetContextId: chatContextId,
+      });
     }
 
     const accessToken = await getAccessToken();
 
     if (!accessToken) {
-      throw new Error("Sign in with Google to use AI note generation.");
+      throw createNoteGenerationError({
+        kind: "error",
+        message: "Sign in with Google to use AI note generation.",
+        targetContextId: chatContextId,
+      });
     }
 
     let effectiveMode = mode;
@@ -1519,8 +1822,8 @@ export function WorkspaceShell({
         sourceNodeIds: sourceNodes.map((node) => node.id),
         targetNoteId:
           effectiveMode === "overwrite_note" &&
-          overwriteTargetNode &&
-          overwriteTargetNode.kind === "note"
+            overwriteTargetNode &&
+            overwriteTargetNode.kind === "note"
             ? overwriteTargetNode.id
             : undefined,
         title: fallbackTitle,
@@ -1529,29 +1832,46 @@ export function WorkspaceShell({
     const payload = (await response
       .json()
       .catch(() => null)) as GenerateNoteResponse | null;
+    const generationRateLimit = parseRateLimit(
+      response,
+      payload?.error || "Too many note-generation requests. Please try again shortly.",
+    );
 
-    if (!response.ok || !payload?.html) {
-      const errorMessage = payload?.error || "Unable to generate note.";
-      const failedNode = buildUpdatedNote(targetNode, {
-        body: buildGenerationFailureHtml(errorMessage),
-        title: fallbackTitle,
+    if (generationRateLimit.isRateLimited) {
+      setCooldown("noteGeneration", generationRateLimit);
+      const cooldownMessage = `${generationRateLimit.message} Try again in ${formatRetryDelay(generationRateLimit.retryInSeconds)}.`;
+      setUploadFeedback({
+        type: "error",
+        message: cooldownMessage,
       });
-      await persistNoteNode(failedNode);
-      throw new Error(errorMessage);
+      throw createNoteGenerationError({
+        kind: "rate_limited",
+        message: cooldownMessage,
+        retryInSeconds: generationRateLimit.retryInSeconds,
+        targetContextId,
+      });
+    }
+
+    if (!response.ok || !payload?.contentJson) {
+      const errorMessage = payload?.error || "Unable to generate note.";
+      setUploadFeedback({
+        type: "error",
+        message: errorMessage,
+      });
+      throw createNoteGenerationError({
+        kind: "error",
+        message: errorMessage,
+        targetContextId,
+      });
     }
 
     let targetNode = overwriteTargetNode;
 
-    if (
-      effectiveMode === "new_note" ||
-      !targetNode ||
-      targetNode.kind !== "note"
-    ) {
-      targetNode =
-        (await createNoteUnderParent(rootNode.id, {
-          markDirty: false,
-          title: fallbackTitle,
-        })) ?? null;
+    if (effectiveMode === "new_note" || !targetNode || targetNode.kind !== "note") {
+      targetNode = (await createNoteUnderParent(rootNode.id, {
+        markDirty: false,
+        title: fallbackTitle,
+      })) ?? null;
 
       if (!targetNode || targetNode.kind !== "note") {
         throw createNoteGenerationError({
@@ -1565,15 +1885,14 @@ export function WorkspaceShell({
     targetContextId = targetNode.id;
 
     const completedNode = buildUpdatedNote(targetNode, {
-      body: payload.html,
+      contentJson: parseNoteDocument(payload.contentJson),
       title: payload.title?.trim() || fallbackTitle,
     });
 
     const savedNode = await persistNoteNode(completedNode);
     const isSessionNote = sessionNoteNodeIds.has(savedNode.id);
     const shouldUpsertSession =
-      effectiveMode === "new_note" ||
-      (effectiveMode === "overwrite_note" && isSessionNote);
+      effectiveMode === "new_note" || (effectiveMode === "overwrite_note" && isSessionNote);
 
     if (shouldUpsertSession) {
       await upsertNoteSession({
@@ -1607,8 +1926,10 @@ export function WorkspaceShell({
       const selectedIds = selectedNodeIds.includes(node.id)
         ? selectedNodeIds
         : [node.id];
-      const { sourceNodes: selectedSources, snapshot } =
-        buildGenerationSourceSnapshot(treeNodesRef.current, selectedIds);
+      const { sourceNodes: selectedSources, snapshot } = buildGenerationSourceSnapshot(
+        treeNodesRef.current,
+        selectedIds,
+      );
 
       if (selectedSources.length === 0) {
         return;
@@ -1616,6 +1937,7 @@ export function WorkspaceShell({
 
       try {
         await generateNoteFromSources({
+          chatContextId: node.id,
           mode: "new_note",
           prompt:
             "Create a premium-quality study note from the selected sources. Be concise, highly structured, exam-focused, and use tables or lists where they add clarity.",
@@ -1697,6 +2019,14 @@ export function WorkspaceShell({
       let nextNodes = treeNodesRef.current;
 
       if (fileNodesToDelete.length > 0) {
+        const deleteCooldownSeconds = getRemainingCooldown("deletePdf");
+
+        if (deleteCooldownSeconds > 0) {
+          throw new Error(
+            `Delete is temporarily rate limited. Try again in ${formatRetryDelay(deleteCooldownSeconds)}.`,
+          );
+        }
+
         const accessToken = await getAccessToken();
 
         if (!accessToken) {
@@ -1717,6 +2047,17 @@ export function WorkspaceShell({
         const payload = (await response
           .json()
           .catch(() => null)) as DeletePdfResponse | null;
+        const deleteRateLimit = parseRateLimit(
+          response,
+          payload?.error || "Too many delete requests. Please wait before retrying.",
+        );
+
+        if (deleteRateLimit.isRateLimited) {
+          setCooldown("deletePdf", deleteRateLimit);
+          throw new Error(
+            `${deleteRateLimit.message} Try again in ${formatRetryDelay(deleteRateLimit.retryInSeconds)}.`,
+          );
+        }
 
         if (!response.ok) {
           if (payload?.treeUpdated && payload.tree) {
@@ -1809,9 +2150,7 @@ export function WorkspaceShell({
 
     const dragNodeId = session.noteNodeId;
 
-    if (
-      !canDropNode(treeNodesRef.current, dragNodeId, targetNodeId, position)
-    ) {
+    if (!canDropNode(treeNodesRef.current, dragNodeId, targetNodeId, position)) {
       return;
     }
 
@@ -1844,9 +2183,7 @@ export function WorkspaceShell({
           throw new Error("Session storage is unavailable.");
         }
 
-        setNoteSessions((current) =>
-          current.filter((item) => item.id !== sessionId),
-        );
+        setNoteSessions((current) => current.filter((item) => item.id !== sessionId));
         syncSelectionState(savedNodes, [dragNodeId], dragNodeId);
         setSelectionAnchorId(dragNodeId);
       })
@@ -1857,9 +2194,7 @@ export function WorkspaceShell({
         setUploadFeedback({
           type: "error",
           message:
-            error instanceof Error
-              ? error.message
-              : "Unable to move session note into tree.",
+            error instanceof Error ? error.message : "Unable to move session note into tree.",
         });
       });
   };
@@ -1907,9 +2242,7 @@ export function WorkspaceShell({
         throw new Error("Session storage is unavailable.");
       }
 
-      setNoteSessions((current) =>
-        current.filter((item) => item.id !== sessionId),
-      );
+      setNoteSessions((current) => current.filter((item) => item.id !== sessionId));
     } catch (error) {
       if (isSessionTableUnavailableError(error)) {
         setIsSessionStorageAvailable(false);
@@ -1954,7 +2287,7 @@ export function WorkspaceShell({
       return;
     }
 
-    if (!supabase || !storageBucket) {
+    if (!supabase || !pdfStorageBucket) {
       setUploadFeedback({
         type: "error",
         message: STORAGE_NOT_CONFIGURED_MESSAGE,
@@ -1962,6 +2295,17 @@ export function WorkspaceShell({
       return;
     }
 
+    const uploadPdfCooldownSeconds = getRemainingCooldown("uploadPdf");
+
+    if (uploadPdfCooldownSeconds > 0) {
+      setUploadFeedback({
+        type: "error",
+        message: `PDF upload is temporarily rate limited. Try again in ${formatRetryDelay(uploadPdfCooldownSeconds)}.`,
+      });
+      return;
+    }
+
+    setIsUploadProgressDismissed(false);
     setIsUploadingPdf(true);
     setUploadFeedback(null);
 
@@ -1987,6 +2331,17 @@ export function WorkspaceShell({
       const payload = (await response
         .json()
         .catch(() => null)) as UploadPdfResponse | null;
+      const uploadPdfRateLimit = parseRateLimit(
+        response,
+        payload?.error || "Too many PDF uploads. Please wait before retrying.",
+      );
+
+      if (uploadPdfRateLimit.isRateLimited) {
+        setCooldown("uploadPdf", uploadPdfRateLimit);
+        throw new Error(
+          `${uploadPdfRateLimit.message} Try again in ${formatRetryDelay(uploadPdfRateLimit.retryInSeconds)}.`,
+        );
+      }
 
       if (!response.ok || !payload?.tree || !payload.fileNode) {
         throw new Error(
@@ -2035,19 +2390,26 @@ export function WorkspaceShell({
         return current;
       }
 
-      const next = buildUpdatedNote(current, { title });
+      const next = buildUpdatedNote(current, { title }, { touchUpdatedAt: false });
       setIsDirty(true);
       return next;
     });
   };
 
-  const handleBodyChange = (body: string) => {
+  const handleBodyChange = (contentJson: NoteDocument) => {
     setDraftNoteNode((current) => {
-      if (!current || current.kind !== "note" || current.body === body) {
+      if (!current || current.kind !== "note") {
         return current;
       }
 
-      const next = buildUpdatedNote(current, { body });
+      if (
+        serializeNoteDocumentForComparison(current.contentJson ?? EMPTY_NOTE_DOCUMENT) ===
+        serializeNoteDocumentForComparison(contentJson)
+      ) {
+        return current;
+      }
+
+      const next = buildUpdatedNote(current, { contentJson }, { touchUpdatedAt: false });
       setIsDirty(true);
       return next;
     });
@@ -2089,13 +2451,10 @@ export function WorkspaceShell({
         },
         method: "POST",
       });
-      const payload = (await response
-        .json()
-        .catch(() => null)) as UploadImageResponse | null;
+      const payload = (await response.json().catch(() => null)) as UploadImageResponse | null;
       const uploadImageRateLimit = parseRateLimit(
         response,
-        payload?.error ||
-          "Too many image uploads. Please wait before retrying.",
+        payload?.error || "Too many image uploads. Please wait before retrying.",
       );
 
       if (uploadImageRateLimit.isRateLimited) {
@@ -2119,14 +2478,7 @@ export function WorkspaceShell({
         width: null,
       };
     },
-    [
-      authUser,
-      classId,
-      getAccessToken,
-      getRemainingCooldown,
-      imageStorageBucket,
-      setCooldown,
-    ],
+    [authUser, classId, getAccessToken, getRemainingCooldown, imageStorageBucket, setCooldown],
   );
 
   const handleSaveNote = async () => {
@@ -2135,14 +2487,32 @@ export function WorkspaceShell({
     }
 
     try {
+      const currentDraft = draftNoteNode;
+      const persistedContentJson = sanitizeImageSourcesForPersistence(
+        currentDraft.contentJson ?? EMPTY_NOTE_DOCUMENT,
+      );
       const savedNodes = await persistTree(
         updateNodeInTree(treeNodesRef.current, {
-          ...draftNoteNode,
-          body: draftNoteNode.body || "<p></p>",
+          ...currentDraft,
+          contentJson: persistedContentJson,
         }),
       );
 
-      syncSelectionState(savedNodes, [draftNoteNode.id], draftNoteNode.id);
+      syncSelectionState(savedNodes, [currentDraft.id], currentDraft.id);
+      setDraftNoteNode((current) => {
+        if (!current || current.kind !== "note" || current.id !== currentDraft.id) {
+          return current;
+        }
+
+        return buildUpdatedNote(
+          current,
+          {
+            contentJson: currentDraft.contentJson ?? EMPTY_NOTE_DOCUMENT,
+            title: currentDraft.title,
+          },
+          { touchUpdatedAt: false },
+        );
+      });
       setIsDirty(false);
     } catch (error) {
       setUploadFeedback({
@@ -2192,6 +2562,18 @@ export function WorkspaceShell({
     const userMessage = createMessage("user", trimmedInput);
     const sourceContextId = activeAiContextId;
     const nextMessages = [...activeChatMessages, userMessage];
+    const chatCooldownSeconds = getRemainingCooldown("chat");
+
+    if (chatCooldownSeconds > 0) {
+      setMessagesForContext(sourceContextId, [
+        ...activeChatMessages,
+        createMessage(
+          "assistant",
+          `Chat is temporarily rate limited. Try again in ${formatRetryDelay(chatCooldownSeconds)}.`,
+        ),
+      ]);
+      return;
+    }
 
     if (!supabase || authStatus !== "signed-in") {
       setMessagesForContext(sourceContextId, [
@@ -2245,6 +2627,22 @@ export function WorkspaceShell({
       const payload = (await response
         .json()
         .catch(() => null)) as ChatResponse | null;
+      const chatRateLimit = parseRateLimit(
+        response,
+        payload?.error || "Too many chat requests. Please try again shortly.",
+      );
+
+      if (chatRateLimit.isRateLimited) {
+        setCooldown("chat", chatRateLimit);
+        setMessagesForContext(sourceContextId, [
+          ...nextMessages,
+          createMessage(
+            "assistant",
+            `${chatRateLimit.message} Try again in ${formatRetryDelay(chatRateLimit.retryInSeconds)}.`,
+          ),
+        ]);
+        return;
+      }
 
       if (!response.ok || !payload?.assistant) {
         throw new Error(
@@ -2277,17 +2675,8 @@ export function WorkspaceShell({
         payload.assistant.target === "current_note" &&
         selectedNodeKind === "note";
 
-      if (shouldOverwriteCurrent) {
-        setMessagesForContext(sourceContextId, [
-          ...nextMessages,
-          assistantMessage,
-        ]);
-      }
-
-      await generateNoteFromSources({
-        chatSeedMessages: shouldOverwriteCurrent
-          ? undefined
-          : [userMessage, assistantMessage],
+      const generatedNode = await generateNoteFromSources({
+        chatContextId: sourceContextId,
         mode: shouldOverwriteCurrent ? "overwrite_note" : "new_note",
         prompt: payload.assistant.prompt,
         sourceSnapshot: snapshot,
@@ -2295,8 +2684,37 @@ export function WorkspaceShell({
         targetNoteId: shouldOverwriteCurrent ? sourceContextId : undefined,
         title: payload.assistant.title,
       });
+      const successContextId = shouldOverwriteCurrent
+        ? sourceContextId
+        : generatedNode.id;
+
+      if (successContextId === sourceContextId) {
+        setMessagesForContext(sourceContextId, [
+          ...nextMessages,
+          assistantMessage,
+        ]);
+      } else {
+        setMessagesForContext(successContextId, [
+          userMessage,
+          assistantMessage,
+        ]);
+      }
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
+
+      if (isNoteGenerationError(error)) {
+        const targetContextId = error.targetContextId || sourceContextId;
+        const priorMessages =
+          targetContextId === sourceContextId
+            ? nextMessages
+            : (chatSessions[targetContextId] ?? [userMessage]);
+
+        setMessagesForContext(targetContextId, [
+          ...priorMessages,
+          createMessage("assistant", error.message),
+        ]);
         return;
       }
 
@@ -2320,20 +2738,19 @@ export function WorkspaceShell({
   const chatDisabledMessage = activeAiContextId
     ? `Chat is temporarily rate limited. Try again in ${formatRetryDelay(chatCooldownSeconds)}.`
     : "Open a note or PDF to chat with StudyAI.";
-  const floatingPopupMessage =
-    isUploadingPdf && !isUploadProgressDismissed
-      ? "Uploading PDF..."
-      : (uploadFeedback?.message ?? "");
-  const floatingPopupVariant =
-    isUploadingPdf && !isUploadProgressDismissed
-      ? "info"
-      : uploadFeedback?.type === "success"
-        ? "success"
-        : uploadFeedback?.type === "error"
-          ? "error"
-          : "info";
-  const floatingPopupAutoDismissMs =
-    isUploadingPdf && !isUploadProgressDismissed ? null : 8_000;
+  const floatingPopupMessage = isUploadingPdf && !isUploadProgressDismissed
+    ? "Uploading PDF..."
+    : (uploadFeedback?.message ?? "");
+  const floatingPopupVariant = isUploadingPdf && !isUploadProgressDismissed
+    ? "info"
+    : uploadFeedback?.type === "success"
+      ? "success"
+      : uploadFeedback?.type === "error"
+        ? "error"
+        : "info";
+  const floatingPopupAutoDismissMs = isUploadingPdf && !isUploadProgressDismissed
+    ? null
+    : 8_000;
   const handleCloseFloatingPopup = () => {
     if (isUploadingPdf) {
       setIsUploadProgressDismissed(true);
@@ -2380,7 +2797,7 @@ export function WorkspaceShell({
         message={floatingPopupMessage}
         onClose={handleCloseFloatingPopup}
         open={Boolean(floatingPopupMessage)}
-        testId='workspace-feedback'
+        testId="workspace-feedback"
         variant={floatingPopupVariant}
       />
       <input
@@ -2429,12 +2846,13 @@ export function WorkspaceShell({
         <EditorPane
           lockIn={lockIn}
           onToggleLockIn={() => setLockIn((current) => !current)}
-          noteId={activeEditorNote?.id ?? null}
+          isNoteLoading={isLoadingSelectedNote}
+          noteId={selectedNodeKind === "note" ? selectedNodeId : null}
           note={
-            activeEditorNote
+            activeEditorNote && activeEditorNote.contentJson !== undefined
               ? {
                   title: activeEditorNote.title,
-                  body: activeEditorNote.body || "<p></p>",
+                  contentJson: activeEditorNote.contentJson,
                   createdAt: activeEditorNote.createdAt,
                   updatedAt: activeEditorNote.updatedAt,
                 }
@@ -2444,6 +2862,7 @@ export function WorkspaceShell({
           isDirty={isDirty}
           onTitleChange={handleTitleChange}
           onBodyChange={handleBodyChange}
+          onUploadImage={handleUploadImage}
           onSave={handleSaveNote}
           onDelete={handleDeleteCurrentNote}
           saveLabel='Save note'
@@ -2455,8 +2874,8 @@ export function WorkspaceShell({
         {isChatOpen ? (
           <div className='relative h-full min-h-0 min-w-0 overflow-hidden lg:col-span-2 xl:col-span-1'>
             <ChatPane
-              disabled={!activeAiContextId}
-              disabledMessage='Open a note or PDF to chat with StudyAI.'
+              disabled={isChatDisabled}
+              disabledMessage={chatDisabledMessage}
               locked={lockIn}
               isStreaming={isChatStreaming}
               onHide={handleHideChat}
@@ -2538,8 +2957,8 @@ export function WorkspaceShell({
               {sessionDeleteConfirmation.message}
             </h2>
             <p className='mt-3 text-sm leading-6 text-(--text-body)'>
-              This removes the session from this list but keeps its linked note
-              in the class tree.
+              This removes the session from this list but keeps its linked note in
+              the class tree.
             </p>
             <div className='mt-6 flex items-center justify-end gap-3'>
               <button

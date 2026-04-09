@@ -37,6 +37,7 @@ import {
   saveTreeUiState,
 } from "@/lib/tree-ui-state";
 import {
+  canDropNode,
   canParentContainChild,
   createNodeInTree,
   createTreeFolderNode,
@@ -77,6 +78,11 @@ type UploadFeedback = {
 type DeleteConfirmationState = {
   directDeleteIds: string[];
   cascadeDeleteIds: string[];
+  message: string;
+};
+
+type SessionDeleteConfirmationState = {
+  sessionId: string;
   message: string;
 };
 
@@ -646,7 +652,10 @@ export function WorkspaceShell({
   const [isDirty, setIsDirty] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] =
     useState<DeleteConfirmationState | null>(null);
+  const [sessionDeleteConfirmation, setSessionDeleteConfirmation] =
+    useState<SessionDeleteConfirmationState | null>(null);
   const [noteSessions, setNoteSessions] = useState<NoteSession[]>([]);
+  const [isSessionStorageAvailable, setIsSessionStorageAvailable] = useState(true);
   const [chatSessions, setChatSessions] = useState<Record<string, Message[]>>(
     {},
   );
@@ -784,6 +793,7 @@ export function WorkspaceShell({
   const resetWorkspaceState = useCallback(() => {
     setTreeNodes([]);
     setNoteSessions([]);
+    setIsSessionStorageAvailable(true);
     setSelectedNodeIds([]);
     setSelectedNodeId(null);
     setSelectedNodeKind(null);
@@ -808,19 +818,30 @@ export function WorkspaceShell({
       };
     }
 
-    const [nodes, sessions] = await Promise.all([
-      treeRepository.current.listTreeByClass(classId, {
-        includeNoteContent: false,
-      }),
-      noteSessionRepository.current.listByClass(classId).catch((error) => {
+    const nodesPromise = treeRepository.current.listTreeByClass(classId, {
+      includeNoteContent: false,
+    });
+    const sessionsPromise = noteSessionRepository.current
+      .listByClass(classId)
+      .then((sessions) => ({
+        available: true,
+        sessions,
+      }))
+      .catch((error) => {
         if (isSessionTableUnavailableError(error)) {
-          return [] as NoteSession[];
+          return {
+            available: false,
+            sessions: [] as NoteSession[],
+          };
         }
 
         throw error;
-      }),
-    ]);
+      });
+    const [nodes, sessionResult] = await Promise.all([nodesPromise, sessionsPromise]);
+    const sessions = sessionResult.sessions;
+
     setTreeNodes(nodes);
+    setIsSessionStorageAvailable(sessionResult.available);
     setNoteSessions(sessions);
     treeNodesRef.current = nodes;
     return { nodes, sessions };
@@ -1538,7 +1559,10 @@ export function WorkspaceShell({
         });
       } catch (error) {
         if (isSessionTableUnavailableError(error)) {
-          return null;
+          setIsSessionStorageAvailable(false);
+          throw new Error(
+            "Session storage is unavailable. Run the latest migrations before generating notes.",
+          );
         }
 
         throw error;
@@ -1761,6 +1785,23 @@ export function WorkspaceShell({
 
     if (!overwriteTargetNode || overwriteTargetNode.kind !== "note") {
       effectiveMode = "new_note";
+    }
+
+    if (
+      effectiveMode === "new_note" &&
+      (!isSessionStorageAvailable || !noteSessionRepository.current)
+    ) {
+      const message =
+        "Session storage is unavailable. Run the latest migrations before generating notes.";
+      setUploadFeedback({
+        type: "error",
+        message,
+      });
+      throw createNoteGenerationError({
+        kind: "error",
+        message,
+        targetContextId,
+      });
     }
 
     const response = await fetch("/api/notes/generate", {
@@ -2093,6 +2134,125 @@ export function WorkspaceShell({
           error instanceof Error ? error.message : "Unable to move item.",
       });
     });
+  };
+
+  const handleMoveSessionToTree = (
+    sessionId: string,
+    targetNodeId: string,
+    position: DropPosition,
+  ) => {
+    const session = sessionById.get(sessionId);
+    const sessionRepository = noteSessionRepository.current;
+
+    if (!session || !sessionRepository) {
+      return;
+    }
+
+    const dragNodeId = session.noteNodeId;
+
+    if (!canDropNode(treeNodesRef.current, dragNodeId, targetNodeId, position)) {
+      return;
+    }
+
+    const nextNodes = moveNodeInTree(
+      treeNodesRef.current,
+      classId,
+      dragNodeId,
+      targetNodeId,
+      position,
+    );
+
+    void persistTree(nextNodes)
+      .then(async (savedNodes) => {
+        if (typeof sessionRepository.deleteById === "function") {
+          await sessionRepository.deleteById({
+            classId,
+            sessionId,
+          });
+        } else if (supabase) {
+          const { error } = await supabase
+            .from("editor_note_sessions")
+            .delete()
+            .eq("class_id", classId)
+            .eq("id", sessionId);
+
+          if (error) {
+            throw error;
+          }
+        } else {
+          throw new Error("Session storage is unavailable.");
+        }
+
+        setNoteSessions((current) => current.filter((item) => item.id !== sessionId));
+        syncSelectionState(savedNodes, [dragNodeId], dragNodeId);
+        setSelectionAnchorId(dragNodeId);
+      })
+      .catch((error) => {
+        if (isSessionTableUnavailableError(error)) {
+          setIsSessionStorageAvailable(false);
+        }
+        setUploadFeedback({
+          type: "error",
+          message:
+            error instanceof Error ? error.message : "Unable to move session note into tree.",
+        });
+      });
+  };
+
+  const handleRequestDeleteSession = (sessionId: string) => {
+    const session = sessionById.get(sessionId);
+
+    if (!session) {
+      return;
+    }
+
+    setDeleteConfirmation(null);
+    setSessionDeleteConfirmation({
+      sessionId,
+      message: `Delete ${session.title} from Sessions?`,
+    });
+  };
+
+  const handleConfirmDeleteSession = async () => {
+    if (!sessionDeleteConfirmation) {
+      return;
+    }
+
+    const { sessionId } = sessionDeleteConfirmation;
+    const sessionRepository = noteSessionRepository.current;
+    setSessionDeleteConfirmation(null);
+
+    try {
+      if (typeof sessionRepository?.deleteById === "function") {
+        await sessionRepository.deleteById({
+          classId,
+          sessionId,
+        });
+      } else if (supabase) {
+        const { error } = await supabase
+          .from("editor_note_sessions")
+          .delete()
+          .eq("class_id", classId)
+          .eq("id", sessionId);
+
+        if (error) {
+          throw error;
+        }
+      } else {
+        throw new Error("Session storage is unavailable.");
+      }
+
+      setNoteSessions((current) => current.filter((item) => item.id !== sessionId));
+    } catch (error) {
+      if (isSessionTableUnavailableError(error)) {
+        setIsSessionStorageAvailable(false);
+      }
+      setUploadFeedback({
+        type: "error",
+        message:
+          error instanceof Error ? error.message : "Unable to delete session.",
+      });
+    }
   };
 
   const handleUploadPdfFile = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -2661,15 +2821,18 @@ export function WorkspaceShell({
           key={`left-${classId}`}
           locked={lockIn}
           collapsed={isLeftPaneCollapsed}
+          isLgViewport={isLgViewport}
           onCollapse={() => setIsLeftPaneCollapsed(true)}
           onExpand={() => setIsLeftPaneCollapsed(false)}
           treeNodes={visibleTreeNodes}
+          allTreeNodesForDrop={treeNodes}
           expandedIds={expandedIds}
           selectedNodeIds={selectedNodeIds}
           selectedNodeId={selectedNodeId}
           classLabel={workspace.classLabel}
           sessions={noteSessions}
           onSelectSession={handleSelectSession}
+          onRequestDeleteSession={handleRequestDeleteSession}
           onSelectNode={handleSelectNode}
           onClearSelectionToActive={handleClearSelectionToActive}
           onCreateFolder={handleCreateFolder}
@@ -2678,6 +2841,7 @@ export function WorkspaceShell({
           onPrepareRowMenu={handlePrepareRowMenu}
           onToggleExpanded={handleToggleExpanded}
           onMoveNode={handleMoveNode}
+          onMoveSessionToTree={handleMoveSessionToTree}
         />
         <EditorPane
           lockIn={lockIn}
@@ -2767,6 +2931,46 @@ export function WorkspaceShell({
               <button
                 className='rounded-full border border-(--destructive) bg-(--destructive) px-5 py-2.5 text-sm font-semibold text-(--destructive-foreground) transition-transform duration-200 hover:-translate-y-0.5'
                 onClick={() => void handleConfirmDelete()}
+                type='button'
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {sessionDeleteConfirmation ? (
+        <div
+          aria-modal='true'
+          className='fixed inset-0 z-50 flex items-center justify-center bg-(--overlay-scrim) p-4 backdrop-blur-sm'
+          onClick={() => setSessionDeleteConfirmation(null)}
+          role='dialog'
+        >
+          <div
+            className='w-full max-w-md rounded-3xl border border-(--border-floating) bg-(--surface-base) p-6 shadow-(--shadow-floating)'
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className='text-xs font-semibold uppercase tracking-widest text-(--text-muted)'>
+              Confirm deletion
+            </p>
+            <h2 className='mt-3 text-2xl font-semibold leading-tight text-(--text-main)'>
+              {sessionDeleteConfirmation.message}
+            </h2>
+            <p className='mt-3 text-sm leading-6 text-(--text-body)'>
+              This removes the session from this list but keeps its linked note in
+              the class tree.
+            </p>
+            <div className='mt-6 flex items-center justify-end gap-3'>
+              <button
+                className='rounded-full border border-(--border-soft) bg-(--surface-input) px-5 py-2.5 text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)'
+                onClick={() => setSessionDeleteConfirmation(null)}
+                type='button'
+              >
+                Cancel
+              </button>
+              <button
+                className='rounded-full border border-(--destructive) bg-(--destructive) px-5 py-2.5 text-sm font-semibold text-(--destructive-foreground) transition-transform duration-200 hover:-translate-y-0.5'
+                onClick={() => void handleConfirmDeleteSession()}
                 type='button'
               >
                 Delete

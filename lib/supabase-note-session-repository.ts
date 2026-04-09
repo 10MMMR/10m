@@ -110,4 +110,22 @@ export class SupabaseNoteSessionRepository {
 
     return toNoteSession(data as NoteSessionRow);
   }
+
+  async deleteById({
+    classId,
+    sessionId,
+  }: {
+    classId: string;
+    sessionId: string;
+  }) {
+    const { error } = await this.client
+      .from("editor_note_sessions")
+      .delete()
+      .eq("class_id", classId)
+      .eq("id", sessionId);
+
+    if (error) {
+      throw error;
+    }
+  }
 }

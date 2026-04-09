@@ -609,7 +609,18 @@ function getDesktopTableMenu() {
 }
 
 function getOverflowMenu() {
-  return document.querySelector("[data-editor-overflow-menu]") as HTMLElement;
+  const menus = document.querySelectorAll("[data-floating-menu] [data-editor-overflow-menu]");
+  return menus[menus.length - 1] as HTMLElement;
+}
+
+function queryOverflowMenu() {
+  const menus = document.querySelectorAll("[data-floating-menu] [data-editor-overflow-menu]");
+  return (menus[menus.length - 1] as HTMLElement | undefined) ?? null;
+}
+
+function getFloatingDesktopTableMenu() {
+  const menus = document.querySelectorAll("[data-floating-menu] [data-editor-table-menu]");
+  return menus[menus.length - 1] as HTMLElement;
 }
 
 describe("EditorPane", () => {
@@ -831,12 +842,12 @@ describe("EditorPane", () => {
     render(<EditorPane {...defaultProps} />);
 
     fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
-    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeDisabled();
+    expect(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeDisabled();
 
     fireEvent.mouseDown(screen.getAllByRole("button", { name: "Insert table" })[0]);
 
-    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeEnabled();
-    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Add row above" })).toBeEnabled();
+    expect(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeEnabled();
+    expect(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Add row above" })).toBeEnabled();
   });
 
   test("deletes a table and persists the updated html", () => {
@@ -871,7 +882,7 @@ describe("EditorPane", () => {
     );
 
     fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
-    fireEvent.mouseDown(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" }));
+    fireEvent.mouseDown(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Delete table" }));
     jest.advanceTimersByTime(100);
 
     expect(onBodyChange).toHaveBeenCalledWith(createParagraphDocument("Table removed"));
@@ -890,15 +901,15 @@ describe("EditorPane", () => {
     );
 
     fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
-    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Add row above" })).toBeDisabled();
+    expect(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Add row above" })).toBeDisabled();
 
-    fireEvent.mouseDown(within(getDesktopTableMenu()).getByRole("button", { name: "Insert table" }));
+    fireEvent.mouseDown(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Insert table" }));
     jest.advanceTimersByTime(100);
 
     expect(onBodyChange).toHaveBeenLastCalledWith(expect.objectContaining({
       type: "doc",
     }));
-    expect(within(getDesktopTableMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
   });
 
   test("opens compact overflow on click and keeps table actions out of the root list", () => {
@@ -909,6 +920,35 @@ describe("EditorPane", () => {
     expect(within(getOverflowMenu()).getByRole("button", { name: "Table" })).toBeInTheDocument();
     expect(within(getOverflowMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
     expect(within(getOverflowMenu()).queryByRole("button", { name: "Delete table" })).not.toBeInTheDocument();
+  });
+
+  test("renders Lock in inside overflow only at tight width and keeps it outside at non-tight compact width", () => {
+    const onToggleLockIn = jest.fn();
+    setToolbarWidth(900);
+    const { unmount } = render(
+      <EditorPane
+        {...defaultProps}
+        onToggleLockIn={onToggleLockIn}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Lock in" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More tools" }));
+    fireEvent.click(within(getOverflowMenu()).getByRole("button", { name: "Lock in" }));
+    expect(onToggleLockIn).toHaveBeenCalledTimes(1);
+
+    unmount();
+    setToolbarWidth(1000);
+    render(
+      <EditorPane
+        {...defaultProps}
+        onToggleLockIn={onToggleLockIn}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Lock in" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "More tools" }));
+    expect(within(getOverflowMenu()).queryByRole("button", { name: "Lock in" })).not.toBeInTheDocument();
   });
 
   test("opens the compact table side submenu on hover and runs table actions", () => {
@@ -934,7 +974,7 @@ describe("EditorPane", () => {
       type: "doc",
     }));
     expect(screen.queryByRole("button", { name: "More tools" })).toBeInTheDocument();
-    expect(within(getOverflowMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
   });
 
   test("closes desktop and compact menus on outside click", () => {
@@ -942,10 +982,10 @@ describe("EditorPane", () => {
     const { rerender } = render(<EditorPane {...defaultProps} />);
 
     fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
-    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Add row above" })).toBeInTheDocument();
+    expect(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Add row above" })).toBeInTheDocument();
 
     fireEvent.click(document.body);
-    expect(within(getDesktopTableMenu()).queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add row above" })).not.toBeInTheDocument();
 
     setToolbarWidth(0);
     rerender(<EditorPane {...defaultProps} />);
@@ -954,7 +994,7 @@ describe("EditorPane", () => {
     expect(within(getOverflowMenu()).getByRole("button", { name: "Bullet list" })).toBeInTheDocument();
 
     fireEvent.click(document.body);
-    expect(within(getOverflowMenu()).queryByRole("button", { name: "Bullet list" })).not.toBeInTheDocument();
+    expect(queryOverflowMenu()).toBeNull();
   });
 
   test("keeps table controls disabled when editing is locked", () => {
@@ -968,7 +1008,7 @@ describe("EditorPane", () => {
 
     expect(screen.getAllByRole("button", { name: "Insert table" })[0]).toBeDisabled();
     fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
-    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeDisabled();
+    expect(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeDisabled();
   });
 
   test("does not reapply stale note html after a local table edit", () => {
@@ -977,7 +1017,7 @@ describe("EditorPane", () => {
 
     fireEvent.mouseDown(screen.getAllByRole("button", { name: "Insert table" })[0]);
     fireEvent.click(within(getDesktopTableMenu()).getByRole("button", { name: "Table" }));
-    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeEnabled();
+    expect(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeEnabled();
 
     rerender(
       <EditorPane
@@ -989,7 +1029,7 @@ describe("EditorPane", () => {
       />,
     );
 
-    expect(within(getDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeEnabled();
+    expect(within(getFloatingDesktopTableMenu()).getByRole("button", { name: "Delete table" })).toBeEnabled();
   });
 
   test("keeps typing inside the same bullet item across same-note rerenders", () => {

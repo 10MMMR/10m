@@ -136,6 +136,8 @@ type TableAction =
   | "toggleHeaderRow"
   | "deleteTable";
 
+type ToolbarDensity = "full" | "compact" | "tight";
+
 type EquationPaletteItem = {
   insertLatex: string;
   previewLatex: string;
@@ -161,6 +163,8 @@ const DEFAULT_TEXT_ALIGN = "left";
 const DEFAULT_LINE_HEIGHT = "1.5";
 const EQUATION_PALETTE_WIDTH = 704;
 const EQUATION_PALETTE_HEIGHT = 620;
+const COMPACT_TOOLBAR_BREAKPOINT = 1240;
+const TIGHT_TOOLBAR_BREAKPOINT = 940;
 const TEXT_ALIGN_OPTIONS = [
   { label: "Left", value: "left" },
   { label: "Center", value: "center" },
@@ -374,6 +378,18 @@ function EquationPreview({
   );
 }
 
+function getToolbarDensity(width: number): ToolbarDensity {
+  if (width < TIGHT_TOOLBAR_BREAKPOINT) {
+    return "tight";
+  }
+
+  if (width < COMPACT_TOOLBAR_BREAKPOINT) {
+    return "compact";
+  }
+
+  return "full";
+}
+
 export function EditorPane({
   lockIn,
   onToggleLockIn,
@@ -408,7 +424,7 @@ export function EditorPane({
     serializeNoteDocumentForComparison(note?.contentJson ?? EMPTY_NOTE_DOCUMENT),
   );
   const previousNoteIdRef = useRef<string | null>(noteId);
-  const [useCompactToolbar, setUseCompactToolbar] = useState(false);
+  const [toolbarDensity, setToolbarDensity] = useState<ToolbarDensity>("full");
   const [isTableMenuOpen, setIsTableMenuOpen] = useState(false);
   const [isAlignMenuOpen, setIsAlignMenuOpen] = useState(false);
   const [isLineSpacingMenuOpen, setIsLineSpacingMenuOpen] = useState(false);
@@ -433,6 +449,14 @@ export function EditorPane({
   const canEdit = Boolean(note) && !lockIn && !isNoteLoading;
   const isDesktopToolbarMenuOpen =
     isTableMenuOpen || isAlignMenuOpen || isLineSpacingMenuOpen;
+  const isCompactToolbar = toolbarDensity !== "full";
+  const isTightToolbar = toolbarDensity === "tight";
+  const shouldUseOverflowScroll =
+    !isDesktopToolbarMenuOpen &&
+    !isOverflowMenuOpen &&
+    !isOverflowTableMenuOpen &&
+    !isOverflowAlignMenuOpen &&
+    !isOverflowLineSpacingMenuOpen;
   const noteDocument = note?.contentJson ?? EMPTY_NOTE_DOCUMENT;
   const serializedNoteDocument = serializeNoteDocumentForComparison(noteDocument);
   const hasActiveEquationField = Boolean(activeEquationId) && canEdit;
@@ -601,25 +625,27 @@ export function EditorPane({
     }
 
     const updateToolbarDensity = () => {
-      const nextUseCompactToolbar = node.clientWidth < 1180;
+      const nextDensity = getToolbarDensity(node.clientWidth);
 
-      setUseCompactToolbar((current) => {
-        if (current === nextUseCompactToolbar) {
+      setToolbarDensity((current) => {
+        if (current === nextDensity) {
           return current;
         }
 
-        if (nextUseCompactToolbar) {
+        if (nextDensity !== "full") {
           setIsTableMenuOpen(false);
           setIsAlignMenuOpen(false);
           setIsLineSpacingMenuOpen(false);
-        } else {
+        }
+
+        if (nextDensity === "full") {
           setIsOverflowMenuOpen(false);
           setIsOverflowTableMenuOpen(false);
           setIsOverflowAlignMenuOpen(false);
           setIsOverflowLineSpacingMenuOpen(false);
         }
 
-        return nextUseCompactToolbar;
+        return nextDensity;
       });
     };
 
@@ -1465,7 +1491,7 @@ export function EditorPane({
   return (
     <section
       ref={editorPaneRef}
-      className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-(--surface-editor)"
+      className="relative z-20 flex min-h-0 min-w-0 flex-col overflow-hidden bg-(--surface-editor)"
     >
       {isEquationPaletteVisible ? (
         <div
@@ -1603,25 +1629,29 @@ export function EditorPane({
       {!isPdfView ? (
         <div
           ref={toolbarRowRef}
-          className="absolute top-4 left-1/2 z-20 hidden w-[calc(100%-32px)] max-w-[1400px] -translate-x-1/2 items-center justify-center gap-3 md:flex"
+          className="absolute top-4 left-1/2 z-40 hidden w-[calc(100%-32px)] min-w-0 max-w-[1400px] -translate-x-1/2 items-center justify-center gap-3 md:flex"
         >
           <div
-            className={`flex max-w-full items-center gap-1 rounded-[20px] bg-(--surface-toolbar-float) px-3 py-2 shadow-(--shadow-floating) backdrop-blur-lg [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
-              useCompactToolbar || isDesktopToolbarMenuOpen
-                ? "overflow-visible"
-                : "overflow-x-auto"
+            className={`flex min-w-0 max-w-full items-center gap-1 rounded-[20px] bg-(--surface-toolbar-float) px-3 py-2 shadow-(--shadow-floating) backdrop-blur-lg [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+              shouldUseOverflowScroll
+                ? "overflow-x-auto overflow-y-visible"
+                : "overflow-visible"
             }`}
           >
-            <button
-              className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-transparent px-3 text-[15px] text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-soft)"
-              type="button"
-              aria-label="Select font family"
-              disabled
-            >
-              <span>Clarika</span>
-              <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
-            </button>
-            <span className="mx-2 h-8 w-px shrink-0 bg-(--border-soft)" aria-hidden="true" />
+            {!isTightToolbar ? (
+              <>
+                <button
+                  className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-transparent px-3 text-[15px] text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-soft)"
+                  type="button"
+                  aria-label="Select font family"
+                  disabled
+                >
+                  <span>Clarika</span>
+                  <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+                </button>
+                <span className="mx-2 h-8 w-px shrink-0 bg-(--border-soft)" aria-hidden="true" />
+              </>
+            ) : null}
             <button
               className={`grid ${toolbarButtonClass({ disabled: !canEdit })}`}
               type="button"
@@ -1704,7 +1734,7 @@ export function EditorPane({
             </button>
             <span className="mx-2 h-8 w-px shrink-0 bg-(--border-soft)" aria-hidden="true" />
             <button
-              className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
+              className={`${isCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
                 disabled: !canEdit,
               })}`}
               type="button"
@@ -1716,7 +1746,7 @@ export function EditorPane({
               <PhotoIcon className="h-5 w-5" aria-hidden="true" />
             </button>
             <button
-              className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
+              className={`${isCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
                 active: isEquationPaletteVisible,
                 disabled: !canEdit,
               })}`}
@@ -1732,7 +1762,7 @@ export function EditorPane({
               </span>
             </button>
             <button
-              className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
+              className={`${isCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
                 disabled: !canRunTableAction("insertTable"),
               })}`}
               type="button"
@@ -1744,7 +1774,7 @@ export function EditorPane({
               <TableCellsIcon className="h-5 w-5" aria-hidden="true" />
             </button>
             <div
-              className={`relative ${useCompactToolbar ? "hidden" : "block"}`}
+              className={`relative ${isCompactToolbar ? "hidden" : "block"}`}
               data-editor-table-menu
               onBlur={handleDesktopTableMenuBlur}
               onFocus={handleDesktopTableMenuFocus}
@@ -1766,7 +1796,7 @@ export function EditorPane({
               ) : null}
             </div>
             <div
-              className={`relative ${useCompactToolbar ? "hidden" : "block"}`}
+              className={`relative ${isCompactToolbar ? "hidden" : "block"}`}
               data-editor-align-menu
             >
               <button
@@ -1790,7 +1820,7 @@ export function EditorPane({
               ) : null}
             </div>
             <button
-              className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
+              className={`${isCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
                 active: toolbarState.bulletList,
                 disabled: !canEdit,
               })}`}
@@ -1804,7 +1834,7 @@ export function EditorPane({
               <ListBulletIcon className="h-5 w-5" aria-hidden="true" />
             </button>
             <button
-              className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
+              className={`${isCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
                 active:
                   toolbarState.orderedList && toolbarState.orderedListType !== "a",
                 disabled: !canEdit,
@@ -1821,7 +1851,7 @@ export function EditorPane({
               <NumberedListIcon className="h-5 w-5" aria-hidden="true" />
             </button>
             <button
-              className={`${useCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
+              className={`${isCompactToolbar ? "hidden" : "grid"} ${toolbarButtonClass({
                 active:
                   toolbarState.orderedList && toolbarState.orderedListType === "a",
                 disabled: !canEdit,
@@ -1838,7 +1868,7 @@ export function EditorPane({
               <QueueListIcon className="h-5 w-5" aria-hidden="true" />
             </button>
             <div
-              className={`relative ${useCompactToolbar ? "hidden" : "block"}`}
+              className={`relative ${isCompactToolbar ? "hidden" : "block"}`}
               data-editor-line-spacing-menu
             >
               <button
@@ -1862,11 +1892,11 @@ export function EditorPane({
               ) : null}
             </div>
             <span
-              className={`mx-2 h-8 w-px shrink-0 bg-(--border-soft) ${useCompactToolbar ? "hidden" : "block"}`}
+              className={`mx-2 h-8 w-px shrink-0 bg-(--border-soft) ${isCompactToolbar ? "hidden" : "block"}`}
               aria-hidden="true"
             />
             <div
-              className={`relative ${useCompactToolbar ? "block" : "hidden"}`}
+              className={`relative ${isCompactToolbar ? "block" : "hidden"}`}
               data-editor-overflow-menu
             >
               <button
@@ -1886,6 +1916,34 @@ export function EditorPane({
               </button>
               {isOverflowMenuOpen ? (
                 <div className="absolute top-[calc(100%+8px)] right-0 z-10 w-44 rounded-2xl border border-(--border-soft) bg-(--surface-base) p-1.5 shadow-(--shadow-floating)">
+                  {isTightToolbar ? (
+                    <>
+                      <button
+                        className={tableControlClass({ disabled: true })}
+                        type="button"
+                        aria-label="Select font family"
+                        aria-disabled="true"
+                        disabled
+                      >
+                        <span>Clarika</span>
+                        <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                      <button
+                        className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors duration-150 ${
+                          lockIn
+                            ? "bg-(--main) text-(--text-contrast) hover:bg-(--main-deep)"
+                            : "text-(--text-main) hover:bg-(--surface-main-soft)"
+                        }`}
+                        type="button"
+                        aria-label="Lock in"
+                        aria-pressed={lockIn}
+                        onClick={onToggleLockIn}
+                      >
+                        <LockClosedIcon className="h-4 w-4" aria-hidden="true" />
+                        Lock in
+                      </button>
+                    </>
+                  ) : null}
                   <button
                     className={tableControlClass({ disabled: !canEdit })}
                     type="button"
@@ -2055,32 +2113,48 @@ export function EditorPane({
                       </div>
                     ) : null}
                   </div>
+                  {isTightToolbar ? (
+                    <button
+                      className={tableControlClass({ disabled: true })}
+                      type="button"
+                      aria-label="Preview"
+                      aria-disabled="true"
+                      disabled
+                    >
+                      <EyeIcon className="h-4 w-4" aria-hidden="true" />
+                      Preview
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
-            <button
-              className={`grid ${toolbarButtonClass({ disabled: true })}`}
-              type="button"
-              aria-label="Preview"
-              aria-disabled="true"
-              disabled
-            >
-              <EyeIcon className="h-5 w-5" aria-hidden="true" />
-            </button>
+            {!isTightToolbar ? (
+              <button
+                className={`grid ${toolbarButtonClass({ disabled: true })}`}
+                type="button"
+                aria-label="Preview"
+                aria-disabled="true"
+                disabled
+              >
+                <EyeIcon className="h-5 w-5" aria-hidden="true" />
+              </button>
+            ) : null}
           </div>
-          <button
-            aria-pressed={lockIn}
-            className={`inline-flex h-14 items-center gap-2 rounded-2xl px-4 text-[15px] font-medium transition-all duration-200 ${
-              lockIn
-                ? "bg-(--main) text-(--text-contrast) shadow-(--shadow-accent)"
-                : "bg-(--surface-toolbar-float) text-(--text-main) shadow-(--shadow-floating)"
-            }`}
-            onClick={onToggleLockIn}
-            type="button"
-          >
-            <LockClosedIcon className="h-5 w-5" aria-hidden="true" />
-            Lock in
-          </button>
+          {!isTightToolbar ? (
+            <button
+              aria-pressed={lockIn}
+              className={`inline-flex h-14 shrink-0 items-center gap-2 rounded-2xl px-4 text-[15px] font-medium transition-all duration-200 ${
+                lockIn
+                  ? "bg-(--main) text-(--text-contrast) shadow-(--shadow-accent)"
+                  : "bg-(--surface-toolbar-float) text-(--text-main) shadow-(--shadow-floating)"
+              }`}
+              onClick={onToggleLockIn}
+              type="button"
+            >
+              <LockClosedIcon className="h-5 w-5" aria-hidden="true" />
+              Lock in
+            </button>
+          ) : null}
         </div>
       ) : null}
 

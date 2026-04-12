@@ -1,18 +1,49 @@
 @import "tailwindcss";
 
 @font-face {
-  font-family: "Sans Forgetica";
-  src:
-    local("Sans Forgetica"),
-    url("/fonts/SansForgetica-Regular.otf") format("opentype"),
-    url("/fonts/SansForgetica-Regular.woff2") format("woff2"),
-    url("/fonts/SansForgetica-Regular.woff") format("woff");
+  font-family: "Satoshi";
+  src: url("/fonts/Satoshi-Regular.woff2") format("woff2");
   font-style: normal;
   font-weight: 400;
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Satoshi";
+  src: url("/fonts/Satoshi-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Satoshi";
+  src: url("/fonts/Satoshi-Medium.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Satoshi";
+  src: url("/fonts/Satoshi-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Satoshi";
+  src: url("/fonts/Satoshi-Black.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+}
+
 :root {
+  --font-body: "Satoshi";
+  --font-display: "Satoshi";
+  --font-mono: "Satoshi";
   color-scheme: light;
 
   --background: #fdfcf8;
@@ -29,6 +60,7 @@
   --card: #fefefa;
   --destructive: #e63c30;
   --destructive-foreground: #ffffff;
+  --success: #2f8f46;
   --ring: #5d7052;
 
   --main: var(--primary);
@@ -64,7 +96,7 @@
   --surface-accent-soft: rgba(193, 140, 93, 0.14);
   --surface-user-soft: rgba(193, 140, 93, 0.22);
   --surface-table-head: rgba(93, 112, 82, 0.06);
-  --border-soft: rgba(93, 112, 82, 0.2);
+  --border-soft: rgba(172, 177, 169, 0.2);
   --border-strong: rgba(93, 112, 82, 0.3);
   --border-selection-active: rgba(255, 255, 255, 0.2);
   --border-selection-inactive: rgba(120, 120, 108, 0.28);
@@ -110,6 +142,7 @@
   --card: #0f1115;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
+  --success: #34c759;
   --ring: #f7931a;
 
   --main: var(--primary);
@@ -179,7 +212,7 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-body);
   --font-serif: var(--font-display);
-  --font-mono: var(--font-geist-mono);
+  --font-mono: var(--font-body);
 }
 
 * {
@@ -202,7 +235,7 @@ body {
   position: relative;
   isolation: isolate;
   line-height: 1.45;
-  font-family: var(--font-body), "Nunito", system-ui, sans-serif;
+  font-family: var(--font-body), system-ui, sans-serif;
 }
 
 body::before {
@@ -250,7 +283,8 @@ input:focus-visible {
 }
 
 .display-font {
-  font-family: var(--font-display), "Fraunces", Georgia, serif;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 700;
 }
 
 .organic-blob-a {
@@ -289,7 +323,8 @@ input:focus-visible {
 .chat-markdown h3,
 .chat-markdown h4 {
   color: var(--text-main);
-  font-family: var(--font-display), "Fraunces", Georgia, serif;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 700;
   line-height: 1.2;
 }
 
@@ -492,7 +527,7 @@ input:focus-visible {
   color: var(--text-muted);
   background: transparent;
   font-size: 0.75rem;
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-mono), system-ui, sans-serif;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -556,17 +591,18 @@ input:focus-visible {
   overscroll-behavior: none;
   color: var(--text-main);
   background: var(--background);
-  font-family: var(--font-body), "Nunito", system-ui, sans-serif;
+  font-family: var(--font-body), system-ui, sans-serif;
 }
 
 .workspace-shell h1,
 .workspace-shell h2 {
-  font-family: var(--font-display), "Fraunces", Georgia, serif;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 700;
   letter-spacing: -0.02em;
 }
 
 .mono-label {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-family: var(--font-mono), system-ui, sans-serif;
 }
 
 @keyframes lock-pulse {

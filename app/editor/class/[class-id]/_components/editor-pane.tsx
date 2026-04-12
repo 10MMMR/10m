@@ -7,7 +7,7 @@ import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
 import Highlight from "@tiptap/extension-highlight";
-import { FontSize, TextStyle } from "@tiptap/extension-text-style";
+import { FontFamily, FontSize, TextStyle } from "@tiptap/extension-text-style";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
@@ -178,6 +178,49 @@ const LINE_HEIGHT_OPTIONS: ReadonlyArray<{
   { label: "1.0", value: "1.0" },
   { label: "1.5", value: "1.5" },
   { label: "2.0", value: "2.0" },
+];
+type EditorFontValue =
+  | "geist"
+  | "satoshi"
+  | "onest"
+  | "arial"
+  | "timesNewRoman";
+const EDITOR_FONT_OPTIONS: ReadonlyArray<{
+  label: string;
+  value: EditorFontValue;
+  fontFamilyValue: string;
+  previewFontFamily: string;
+}> = [
+  {
+    label: "Geist",
+    value: "geist",
+    fontFamilyValue: "var(--font-editor)",
+    previewFontFamily: "var(--font-editor), system-ui, sans-serif",
+  },
+  {
+    label: "Satoshi",
+    value: "satoshi",
+    fontFamilyValue: "Satoshi",
+    previewFontFamily: "Satoshi, system-ui, sans-serif",
+  },
+  {
+    label: "Onest",
+    value: "onest",
+    fontFamilyValue: "var(--font-onest)",
+    previewFontFamily: "var(--font-onest), system-ui, sans-serif",
+  },
+  {
+    label: "Arial",
+    value: "arial",
+    fontFamilyValue: "Arial",
+    previewFontFamily: "Arial, Helvetica, sans-serif",
+  },
+  {
+    label: "Times New Roman",
+    value: "timesNewRoman",
+    fontFamilyValue: "'Times New Roman'",
+    previewFontFamily: "'Times New Roman', Times, serif",
+  },
 ];
 const EQUATION_PALETTE_GROUPS: EquationPaletteGroup[] = [
   {
@@ -390,6 +433,10 @@ function getToolbarDensity(width: number): ToolbarDensity {
   return "full";
 }
 
+function normalizeFontFamily(value: string | null | undefined) {
+  return (value ?? "").replaceAll('"', "").replaceAll("'", "").trim().toLowerCase();
+}
+
 export function EditorPane({
   lockIn,
   onToggleLockIn,
@@ -428,11 +475,14 @@ export function EditorPane({
   const [isTableMenuOpen, setIsTableMenuOpen] = useState(false);
   const [isAlignMenuOpen, setIsAlignMenuOpen] = useState(false);
   const [isLineSpacingMenuOpen, setIsLineSpacingMenuOpen] = useState(false);
+  const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
   const [isOverflowTableMenuOpen, setIsOverflowTableMenuOpen] = useState(false);
   const [isOverflowAlignMenuOpen, setIsOverflowAlignMenuOpen] = useState(false);
   const [isOverflowLineSpacingMenuOpen, setIsOverflowLineSpacingMenuOpen] =
     useState(false);
+  const [lastSelectedEditorFont, setLastSelectedEditorFont] =
+    useState<EditorFontValue>("geist");
   const [isEquationPaletteOpen, setIsEquationPaletteOpen] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
@@ -453,6 +503,7 @@ export function EditorPane({
   const isTightToolbar = toolbarDensity === "tight";
   const shouldUseOverflowScroll =
     !isDesktopToolbarMenuOpen &&
+    !isFontMenuOpen &&
     !isOverflowMenuOpen &&
     !isOverflowTableMenuOpen &&
     !isOverflowAlignMenuOpen &&
@@ -553,6 +604,7 @@ export function EditorPane({
       StarterKit,
       Highlight.configure({ multicolor: false }),
       TextStyle,
+      FontFamily,
       FontSize,
       inlineImageExtension,
       TextAlign.configure({
@@ -636,6 +688,7 @@ export function EditorPane({
           setIsTableMenuOpen(false);
           setIsAlignMenuOpen(false);
           setIsLineSpacingMenuOpen(false);
+          setIsFontMenuOpen(false);
         }
 
         if (nextDensity === "full") {
@@ -679,6 +732,11 @@ export function EditorPane({
       if (!target?.closest("[data-editor-line-spacing-menu]")) {
         setIsLineSpacingMenuOpen(false);
       }
+
+      if (!target?.closest("[data-editor-font-menu]")) {
+        setIsFontMenuOpen(false);
+      }
+
     };
 
     document.addEventListener("click", handleDocumentClick);
@@ -933,6 +991,8 @@ export function EditorPane({
         lineHeight: editor
           ? getBlockAttribute(editor, "lineHeight") ?? DEFAULT_LINE_HEIGHT
           : DEFAULT_LINE_HEIGHT,
+        fontFamily: editor ? String(editor.getAttributes("textStyle").fontFamily ?? "") : "",
+        hasSelection: editor ? !editor.state.selection.empty : false,
         fontSize: equationIsActive
           ? equationFontSize || DEFAULT_FONT_SIZE
           : editor
@@ -1199,6 +1259,10 @@ export function EditorPane({
     setIsLineSpacingMenuOpen(false);
   };
 
+  const closeDesktopFontMenu = () => {
+    setIsFontMenuOpen(false);
+  };
+
   const closeOverflowMenus = () => {
     setIsOverflowMenuOpen(false);
     setIsOverflowTableMenuOpen(false);
@@ -1294,6 +1358,7 @@ export function EditorPane({
   const handleDesktopTableMenuFocus = () => {
     setIsAlignMenuOpen(false);
     setIsLineSpacingMenuOpen(false);
+    setIsFontMenuOpen(false);
     setIsTableMenuOpen(true);
   };
 
@@ -1313,8 +1378,68 @@ export function EditorPane({
     setIsTableMenuOpen(false);
     setIsAlignMenuOpen(false);
     setIsLineSpacingMenuOpen(false);
+    setIsFontMenuOpen(false);
     setter((current) => !current);
   };
+
+  const activeEditorFontOption = EDITOR_FONT_OPTIONS.find(
+    (option) =>
+      normalizeFontFamily(option.fontFamilyValue) ===
+      normalizeFontFamily(toolbarState.fontFamily),
+  );
+  const lastSelectedEditorFontOption =
+    EDITOR_FONT_OPTIONS.find((option) => option.value === lastSelectedEditorFont) ??
+    EDITOR_FONT_OPTIONS[0];
+  const selectedEditorFontLabel = lastSelectedEditorFontOption?.label ?? "Geist";
+
+  const applyEditorFont = (
+    event: MouseEvent<HTMLButtonElement>,
+    value: EditorFontValue,
+    closeMenu: () => void,
+  ) => {
+    event.preventDefault();
+
+    if (!editor || !canEdit || editor.state.selection.empty) {
+      return;
+    }
+
+    const nextFont = EDITOR_FONT_OPTIONS.find((option) => option.value === value);
+    if (!nextFont) {
+      return;
+    }
+
+    editor.chain().focus().setFontFamily(nextFont.fontFamilyValue).run();
+    setLastSelectedEditorFont(value);
+    closeMenu();
+  };
+
+  const editorFontMenu = (closeMenu: () => void) => (
+    <div className="w-56 rounded-2xl border border-(--border-soft) bg-(--surface-base) p-1.5 shadow-(--shadow-floating)">
+      {EDITOR_FONT_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          className={tableControlClass({
+            active:
+              normalizeFontFamily(activeEditorFontOption?.fontFamilyValue) ===
+              normalizeFontFamily(option.fontFamilyValue),
+            disabled: !canEdit || !toolbarState.hasSelection,
+          })}
+          type="button"
+          aria-label={`Use ${option.label}`}
+          aria-pressed={
+            normalizeFontFamily(activeEditorFontOption?.fontFamilyValue) ===
+            normalizeFontFamily(option.fontFamilyValue)
+          }
+          aria-disabled={!canEdit || !toolbarState.hasSelection}
+          disabled={!canEdit || !toolbarState.hasSelection}
+          onMouseDown={(event) => applyEditorFont(event, option.value, closeMenu)}
+          style={{ fontFamily: option.previewFontFamily }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
 
   const alignMenu = (closeMenu: () => void) => (
     <div className="w-44 rounded-2xl border border-(--border-soft) bg-(--surface-base) p-1.5 shadow-(--shadow-floating)">
@@ -1491,7 +1616,7 @@ export function EditorPane({
   return (
     <section
       ref={editorPaneRef}
-      className="relative z-20 flex min-h-0 min-w-0 flex-col overflow-hidden bg-(--surface-editor)"
+      className="relative z-20 flex min-h-0 min-w-0 flex-col overflow-hidden bg-(--surface-editor) lg:rounded-2xl lg:border lg:border-(--border-soft)"
     >
       {isEquationPaletteVisible ? (
         <div
@@ -1638,20 +1763,24 @@ export function EditorPane({
                 : "overflow-visible"
             }`}
           >
-            {!isTightToolbar ? (
-              <>
-                <button
-                  className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-transparent px-3 text-[15px] text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-soft)"
-                  type="button"
-                  aria-label="Select font family"
-                  disabled
-                >
-                  <span>Clarika</span>
-                  <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
-                </button>
-                <span className="mx-2 h-8 w-px shrink-0 bg-(--border-soft)" aria-hidden="true" />
-              </>
-            ) : null}
+            <div className="relative" data-editor-font-menu>
+              <button
+                className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-transparent px-3 text-[15px] text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-soft)"
+                type="button"
+                aria-label="Select font family"
+                aria-expanded={isFontMenuOpen}
+                onClick={() => toggleDesktopMenu(setIsFontMenuOpen)}
+              >
+                <span className="max-w-24 truncate">{selectedEditorFontLabel}</span>
+                <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+              </button>
+              {isFontMenuOpen ? (
+                <div className="absolute top-[calc(100%+8px)] right-0 z-10">
+                  {editorFontMenu(closeDesktopFontMenu)}
+                </div>
+              ) : null}
+            </div>
+            <span className="mx-2 h-8 w-px shrink-0 bg-(--border-soft)" aria-hidden="true" />
             <button
               className={`grid ${toolbarButtonClass({ disabled: !canEdit })}`}
               type="button"
@@ -1919,16 +2048,6 @@ export function EditorPane({
                   {isTightToolbar ? (
                     <>
                       <button
-                        className={tableControlClass({ disabled: true })}
-                        type="button"
-                        aria-label="Select font family"
-                        aria-disabled="true"
-                        disabled
-                      >
-                        <span>Clarika</span>
-                        <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
-                      </button>
-                      <button
                         className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors duration-150 ${
                           lockIn
                             ? "bg-(--main) text-(--text-contrast) hover:bg-(--main-deep)"
@@ -2171,7 +2290,7 @@ export function EditorPane({
             <div
               className={`${isPdfView ? "h-full p-0" : "px-8 pt-11 pb-14 max-[860px]:px-[18px]"} ${
                 lockIn
-                  ? "[font-family:'Sans_Forgetica','Trebuchet_MS','Segoe_UI',sans-serif]"
+                  ? "font-sans"
                   : ""
               }`}
             >
@@ -2205,7 +2324,7 @@ export function EditorPane({
                   </label>
                   <input
                     id="note-title-input"
-                    className="w-full border-0 bg-transparent p-0 font-[Georgia,'Times_New_Roman',serif] text-[clamp(2rem,5vw,3.6rem)] leading-[0.98] text-(--text-main) outline-none"
+                    className="display-font w-full border-0 bg-transparent p-0 text-[clamp(2rem,5vw,3.6rem)] leading-[0.98] text-(--text-main) outline-none"
                     onChange={(event) => onTitleChange(event.target.value)}
                     placeholder={titlePlaceholder}
                     value={note.title}

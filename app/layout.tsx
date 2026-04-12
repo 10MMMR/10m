@@ -1,27 +1,21 @@
 import type { Metadata } from "next";
-import { Fraunces, Geist_Mono, Nunito } from "next/font/google";
+import { Geist, Onest } from "next/font/google";
 import { AuthProvider } from "./_global/authentication/auth-context";
 import { SiteFooter } from "./_components/site-footer";
 import { SiteNavbar } from "./_components/site-navbar";
 import { ThemeTogglePill } from "./_components/theme-toggle-pill";
 import "./globals.css";
 
-const fraunces = Fraunces({
-  variable: "--font-display",
-  subsets: ["latin"],
-  weight: ["600", "700", "800"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const geist = Geist({
+  variable: "--font-editor",
   subsets: ["latin"],
 });
 
-const nunito = Nunito({
-  variable: "--font-body",
+const onest = Onest({
+  variable: "--font-onest",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
 });
+
 
 export const metadata: Metadata = {
   title: "10M Study",
@@ -60,7 +54,7 @@ export default function RootLayout({
       suppressHydrationWarning
       lang="en"
       data-theme="light"
-      className={`${fraunces.variable} ${nunito.variable} ${geistMono.variable} h-full scroll-smooth antialiased`}
+      className={`${geist.variable} ${onest.variable} h-full scroll-smooth antialiased`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />

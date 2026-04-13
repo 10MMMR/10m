@@ -3,6 +3,8 @@
 import { ArrowUpTrayIcon, TrashIcon } from "@heroicons/react/24/outline";
 import { ChevronUpDownIcon } from "@heroicons/react/20/solid";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { useAuth } from "@/app/_global/authentication/auth-context";
+import { supabase } from "@/app/_global/authentication/supabaseClient";
 import {
   OptionsPopup,
   type OptionsPopupColumn,
@@ -20,6 +22,16 @@ type ScheduleEntry = {
   daySelection: OptionsPopupSelection;
   startTimeSelection: OptionsPopupSelection;
   endTimeSelection: OptionsPopupSelection;
+};
+type ScheduleEntryError = {
+  day?: string;
+  startTime?: string;
+  endTime?: string;
+};
+type PreparedSchedule = {
+  dayOfWeek: number;
+  endTime: string;
+  startTime: string;
 };
 
 const classDayColumns: OptionsPopupColumn[] = [
@@ -76,6 +88,16 @@ const defaultTimeSelection: OptionsPopupSelection = {
   minute: null,
   period: null,
 };
+const dayToDayOfWeek: Record<string, number> = {
+  Monday: 1,
+  Tuesday: 2,
+  Wednesday: 3,
+  Thursday: 4,
+  Friday: 5,
+  Saturday: 6,
+  Sunday: 7,
+};
+const missingColumnPattern = /could not find.*column|column .* does not exist/i;
 
 const createScheduleEntry = (id: string): ScheduleEntry => ({
   id,
@@ -101,12 +123,38 @@ const hasSelectedTime = (selection: OptionsPopupSelection) =>
   typeof selection.hour === "number" &&
   typeof selection.minute === "number" &&
   typeof selection.period === "string";
+const isMissingColumnError = (message: string | undefined) =>
+  missingColumnPattern.test(message ?? "");
+
+const toTwentyFourHour = (hour: number, period: string) => {
+  if (period === "am") {
+    return hour % 12;
+  }
+
+  return hour % 12 === 0 ? 12 : hour + 12;
+};
+
+const toDateForDayAndTime = (dayOfWeek: number, hour24: number, minute: number) => {
+  const next = new Date();
+  const targetDay = dayOfWeek % 7;
+  const delta = (targetDay - next.getDay() + 7) % 7;
+
+  next.setDate(next.getDate() + delta);
+  next.setHours(hour24, minute, 0, 0);
+  return next;
+};
 
 export default function ClassesPage() {
+  const { user } = useAuth();
   const [isAddClassModalOpen, setIsAddClassModalOpen] = useState(false);
   const [addClassStep, setAddClassStep] = useState<AddClassStep>("options");
   const [activeSchedulePopup, setActiveSchedulePopup] = useState<ActiveSchedulePopup | null>(null);
   const [className, setClassName] = useState("");
+  const [classNameError, setClassNameError] = useState<string | null>(null);
+  const [scheduleSectionError, setScheduleSectionError] = useState<string | null>(null);
+  const [scheduleErrors, setScheduleErrors] = useState<Record<string, ScheduleEntryError>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isSubmittingClass, setIsSubmittingClass] = useState(false);
   const [scheduleEntries, setScheduleEntries] = useState<ScheduleEntry[]>([
     createScheduleEntry("schedule-1"),
   ]);
@@ -152,6 +200,7 @@ export default function ClassesPage() {
   const handleManualEntryClick = () => {
     setAddClassStep("manual-entry");
     setActiveSchedulePopup(null);
+    setSubmitError(null);
   };
 
   const handleScheduleFieldClick = (entryId: string, field: ScheduleField) => {
@@ -178,6 +227,26 @@ export default function ClassesPage() {
           : entry,
       ),
     );
+    setScheduleSectionError(null);
+    setSubmitError(null);
+    setScheduleErrors((previousErrors) => {
+      const entryErrors = previousErrors[entryId];
+      if (!entryErrors?.day) {
+        return previousErrors;
+      }
+
+      const nextEntryErrors = { ...entryErrors };
+      delete nextEntryErrors.day;
+
+      const nextErrors = { ...previousErrors };
+      if (Object.keys(nextEntryErrors).length === 0) {
+        delete nextErrors[entryId];
+      } else {
+        nextErrors[entryId] = nextEntryErrors;
+      }
+
+      return nextErrors;
+    });
   };
 
   const handleStartTimeSelectionChange = (entryId: string, selection: OptionsPopupSelection) => {
@@ -191,6 +260,26 @@ export default function ClassesPage() {
           : entry,
       ),
     );
+    setScheduleSectionError(null);
+    setSubmitError(null);
+    setScheduleErrors((previousErrors) => {
+      const entryErrors = previousErrors[entryId];
+      if (!entryErrors?.startTime) {
+        return previousErrors;
+      }
+
+      const nextEntryErrors = { ...entryErrors };
+      delete nextEntryErrors.startTime;
+
+      const nextErrors = { ...previousErrors };
+      if (Object.keys(nextEntryErrors).length === 0) {
+        delete nextErrors[entryId];
+      } else {
+        nextErrors[entryId] = nextEntryErrors;
+      }
+
+      return nextErrors;
+    });
   };
 
   const handleEndTimeSelectionChange = (entryId: string, selection: OptionsPopupSelection) => {
@@ -204,6 +293,26 @@ export default function ClassesPage() {
           : entry,
       ),
     );
+    setScheduleSectionError(null);
+    setSubmitError(null);
+    setScheduleErrors((previousErrors) => {
+      const entryErrors = previousErrors[entryId];
+      if (!entryErrors?.endTime) {
+        return previousErrors;
+      }
+
+      const nextEntryErrors = { ...entryErrors };
+      delete nextEntryErrors.endTime;
+
+      const nextErrors = { ...previousErrors };
+      if (Object.keys(nextEntryErrors).length === 0) {
+        delete nextErrors[entryId];
+      } else {
+        nextErrors[entryId] = nextEntryErrors;
+      }
+
+      return nextErrors;
+    });
   };
 
   const handleAddScheduleEntry = () => {
@@ -211,6 +320,8 @@ export default function ClassesPage() {
     nextScheduleId.current += 1;
 
     setScheduleEntries((previousEntries) => [...previousEntries, createScheduleEntry(newId)]);
+    setScheduleSectionError(null);
+    setSubmitError(null);
   };
 
   const handleDeleteScheduleEntry = (entryId: string) => {
@@ -225,10 +336,235 @@ export default function ClassesPage() {
 
       return previousEntries.filter((entry) => entry.id !== entryId);
     });
+    setScheduleErrors((previousErrors) => {
+      if (!previousErrors[entryId]) {
+        return previousErrors;
+      }
+
+      const nextErrors = { ...previousErrors };
+      delete nextErrors[entryId];
+      return nextErrors;
+    });
+    setSubmitError(null);
   };
 
-  const handleManualSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleManualSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    if (isSubmittingClass) {
+      return;
+    }
+
+    const trimmedClassName = className.trim();
+    const nextScheduleErrors: Record<string, ScheduleEntryError> = {};
+    let hasValidationError = false;
+
+    if (trimmedClassName.length === 0) {
+      setClassNameError("Class name is required.");
+      hasValidationError = true;
+    } else {
+      setClassNameError(null);
+    }
+
+    if (scheduleEntries.length === 0) {
+      setScheduleSectionError("Add at least one class schedule.");
+      hasValidationError = true;
+    } else {
+      setScheduleSectionError(null);
+    }
+
+    scheduleEntries.forEach((entry) => {
+      const entryErrors: ScheduleEntryError = {};
+
+      if (!hasSelectedDay(entry.daySelection)) {
+        entryErrors.day = "Select a day of the week.";
+      }
+
+      if (!hasSelectedTime(entry.startTimeSelection)) {
+        entryErrors.startTime = "Complete the start time.";
+      }
+
+      if (!hasSelectedTime(entry.endTimeSelection)) {
+        entryErrors.endTime = "Complete the end time.";
+      }
+
+      if (Object.keys(entryErrors).length > 0) {
+        nextScheduleErrors[entry.id] = entryErrors;
+        hasValidationError = true;
+      }
+    });
+
+    setScheduleErrors(nextScheduleErrors);
+
+    if (hasValidationError) {
+      return;
+    }
+
+    if (!user?.id || !supabase) {
+      setSubmitError("Could not connect to class storage. Please try again.");
+      return;
+    }
+
+    const preparedSchedule: PreparedSchedule[] = [];
+
+    for (const entry of scheduleEntries) {
+      const selectedDay = entry.daySelection.day;
+      const startHour = entry.startTimeSelection.hour;
+      const startMinute = entry.startTimeSelection.minute;
+      const startPeriod = entry.startTimeSelection.period;
+      const endHour = entry.endTimeSelection.hour;
+      const endMinute = entry.endTimeSelection.minute;
+      const endPeriod = entry.endTimeSelection.period;
+
+      if (
+        typeof selectedDay !== "string" ||
+        typeof startHour !== "number" ||
+        typeof startMinute !== "number" ||
+        typeof startPeriod !== "string" ||
+        typeof endHour !== "number" ||
+        typeof endMinute !== "number" ||
+        typeof endPeriod !== "string"
+      ) {
+        setSubmitError("One or more schedule entries are invalid.");
+        return;
+      }
+
+      const dayOfWeek = dayToDayOfWeek[selectedDay];
+      if (!dayOfWeek) {
+        setSubmitError("One or more schedule days are invalid.");
+        return;
+      }
+
+      const startDate = toDateForDayAndTime(
+        dayOfWeek,
+        toTwentyFourHour(startHour, startPeriod),
+        startMinute,
+      );
+      const endDate = toDateForDayAndTime(
+        dayOfWeek,
+        toTwentyFourHour(endHour, endPeriod),
+        endMinute,
+      );
+
+      if (endDate <= startDate) {
+        endDate.setDate(endDate.getDate() + 1);
+      }
+
+      preparedSchedule.push({
+        dayOfWeek,
+        startTime: startDate.toISOString(),
+        endTime: endDate.toISOString(),
+      });
+    }
+
+    setSubmitError(null);
+    setIsSubmittingClass(true);
+
+    try {
+      const classPayloadCandidates: Array<Record<string, string>> = [
+        { name: trimmedClassName, user_id: user.id },
+        { name: trimmedClassName, userId: user.id },
+        { name: trimmedClassName },
+      ];
+
+      let classId: string | number | null = null;
+      let classInsertErrorMessage: string | null = null;
+
+      for (const payload of classPayloadCandidates) {
+        const { data, error } = await supabase
+          .from("classes")
+          .insert(payload)
+          .select("id")
+          .single();
+
+        if (!error && data?.id !== undefined && data?.id !== null) {
+          classId = data.id;
+          break;
+        }
+
+        if (error && isMissingColumnError(error.message)) {
+          classInsertErrorMessage = error.message;
+          continue;
+        }
+
+        classInsertErrorMessage = error?.message ?? "Unable to create class.";
+        break;
+      }
+
+      if (classId === null) {
+        setSubmitError(classInsertErrorMessage ?? "Unable to create class.");
+        return;
+      }
+
+      const schedulePayloadCandidates = [
+        preparedSchedule.map((row) => ({
+          class_id: classId,
+          user_id: user.id,
+          start_time: row.startTime,
+          end_time: row.endTime,
+          day_of_week: row.dayOfWeek,
+        })),
+        preparedSchedule.map((row) => ({
+          class_id: classId,
+          start_time: row.startTime,
+          end_time: row.endTime,
+          day_of_week: row.dayOfWeek,
+        })),
+        preparedSchedule.map((row) => ({
+          classId,
+          userId: user.id,
+          startTime: row.startTime,
+          endTime: row.endTime,
+          dayOfWeek: row.dayOfWeek,
+        })),
+        preparedSchedule.map((row) => ({
+          classId,
+          startTime: row.startTime,
+          endTime: row.endTime,
+          dayOfWeek: row.dayOfWeek,
+        })),
+      ];
+
+      let scheduleInsertErrorMessage: string | null = null;
+      let didInsertSchedule = false;
+
+      for (const payload of schedulePayloadCandidates) {
+        const { error } = await supabase.from("class_schedule").insert(payload);
+
+        if (!error) {
+          didInsertSchedule = true;
+          break;
+        }
+
+        if (isMissingColumnError(error.message)) {
+          scheduleInsertErrorMessage = error.message;
+          continue;
+        }
+
+        scheduleInsertErrorMessage = error.message ?? "Unable to create class schedule.";
+        break;
+      }
+
+      if (!didInsertSchedule) {
+        setSubmitError(scheduleInsertErrorMessage ?? "Unable to create class schedule.");
+        return;
+      }
+
+      setClassName("");
+      setClassNameError(null);
+      setScheduleSectionError(null);
+      setScheduleErrors({});
+      setSubmitError(null);
+      setScheduleEntries([createScheduleEntry("schedule-1")]);
+      nextScheduleId.current = 2;
+      setActiveSchedulePopup(null);
+      setAddClassStep("options");
+      setIsAddClassModalOpen(false);
+    } catch {
+      setSubmitError("Unable to create class right now. Please try again.");
+    } finally {
+      setIsSubmittingClass(false);
+    }
   };
 
   return (
@@ -258,7 +594,7 @@ export default function ClassesPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-(--overlay-scrim) p-0 sm:px-4"
           role="dialog"
         >
-          <div className="organic-card h-full w-full overflow-y-auto rounded-none p-6 sm:h-auto sm:max-h-[90dvh] sm:max-w-3xl sm:rounded-[1.8rem] sm:p-7">
+          <div className="organic-card h-full w-full overflow-y-auto rounded-none p-6 sm:h-auto sm:max-h-[90dvh] sm:max-w-5xl sm:rounded-[1.8rem] sm:p-7">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="mono-label text-xs font-semibold uppercase tracking-[0.14em] text-(--text-muted)">
@@ -311,6 +647,7 @@ export default function ClassesPage() {
                   onClick={() => {
                     setAddClassStep("options");
                     setActiveSchedulePopup(null);
+                    setSubmitError(null);
                   }}
                   type="button"
                 >
@@ -322,14 +659,21 @@ export default function ClassesPage() {
                     Class name
                   </label>
                   <input
-                    className="organic-input"
+                    className={`organic-input ${classNameError ? "border-(--destructive)" : ""}`}
                     id="class-name"
                     name="className"
-                    onChange={(event) => setClassName(event.target.value)}
+                    onChange={(event) => {
+                      setClassName(event.target.value);
+                      if (classNameError) {
+                        setClassNameError(null);
+                      }
+                      setSubmitError(null);
+                    }}
                     placeholder="Example: Biology 101"
                     type="text"
                     value={className}
                   />
+                  {classNameError ? <p className="text-sm text-(--destructive)">{classNameError}</p> : null}
                 </div>
 
                 <section className="space-y-3">
@@ -370,7 +714,9 @@ export default function ClassesPage() {
                               Day
                             </p>
                             <button
-                              className="organic-input inline-flex h-12 cursor-pointer items-center justify-between px-4 text-left text-sm font-semibold text-(--text-main)"
+                              className={`organic-input inline-flex h-12 cursor-pointer items-center justify-between px-4 text-left text-sm font-semibold text-(--text-main) ${
+                                scheduleErrors[entry.id]?.day ? "border-(--destructive)" : ""
+                              }`}
                               onClick={() => handleScheduleFieldClick(entry.id, "day")}
                               type="button"
                             >
@@ -398,7 +744,13 @@ export default function ClassesPage() {
                                 onSelectionChange={(selection) =>
                                   handleDaySelectionChange(entry.id, selection)
                                 }
+                                selectedValues={entry.daySelection}
                               />
+                            ) : null}
+                            {scheduleErrors[entry.id]?.day ? (
+                              <p className="mt-2 text-sm text-(--destructive)">
+                                {scheduleErrors[entry.id]?.day}
+                              </p>
                             ) : null}
                           </div>
 
@@ -407,7 +759,9 @@ export default function ClassesPage() {
                               Start time
                             </p>
                             <button
-                              className="organic-input inline-flex h-12 cursor-pointer items-center justify-between px-4 text-left text-sm font-semibold text-(--text-main)"
+                              className={`organic-input inline-flex h-12 cursor-pointer items-center justify-between px-4 text-left text-sm font-semibold text-(--text-main) ${
+                                scheduleErrors[entry.id]?.startTime ? "border-(--destructive)" : ""
+                              }`}
                               onClick={() => handleScheduleFieldClick(entry.id, "start-time")}
                               type="button"
                             >
@@ -433,7 +787,13 @@ export default function ClassesPage() {
                                 onSelectionChange={(selection) =>
                                   handleStartTimeSelectionChange(entry.id, selection)
                                 }
+                                selectedValues={entry.startTimeSelection}
                               />
+                            ) : null}
+                            {scheduleErrors[entry.id]?.startTime ? (
+                              <p className="mt-2 text-sm text-(--destructive)">
+                                {scheduleErrors[entry.id]?.startTime}
+                              </p>
                             ) : null}
                           </div>
 
@@ -442,7 +802,9 @@ export default function ClassesPage() {
                               End time
                             </p>
                             <button
-                              className="organic-input inline-flex h-12 cursor-pointer items-center justify-between px-4 text-left text-sm font-semibold text-(--text-main)"
+                              className={`organic-input inline-flex h-12 cursor-pointer items-center justify-between px-4 text-left text-sm font-semibold text-(--text-main) ${
+                                scheduleErrors[entry.id]?.endTime ? "border-(--destructive)" : ""
+                              }`}
                               onClick={() => handleScheduleFieldClick(entry.id, "end-time")}
                               type="button"
                             >
@@ -464,21 +826,37 @@ export default function ClassesPage() {
                             {activeSchedulePopup?.entryId === entry.id &&
                             activeSchedulePopup.field === "end-time" ? (
                               <OptionsPopup
+                                align="right"
                                 columns={classTimeColumns}
                                 onSelectionChange={(selection) =>
                                   handleEndTimeSelectionChange(entry.id, selection)
                                 }
+                                selectedValues={entry.endTimeSelection}
                               />
+                            ) : null}
+                            {scheduleErrors[entry.id]?.endTime ? (
+                              <p className="mt-2 text-sm text-(--destructive)">
+                                {scheduleErrors[entry.id]?.endTime}
+                              </p>
                             ) : null}
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
+                  {scheduleSectionError ? (
+                    <p className="text-sm text-(--destructive)">{scheduleSectionError}</p>
+                  ) : null}
                 </section>
 
-                <button className="organic-button organic-button-primary min-h-11" type="submit">
-                  Save class name
+                {submitError ? <p className="text-sm text-(--destructive)">{submitError}</p> : null}
+
+                <button
+                  className="organic-button organic-button-primary min-h-11 disabled:pointer-events-none disabled:opacity-60"
+                  disabled={isSubmittingClass}
+                  type="submit"
+                >
+                  {isSubmittingClass ? "Adding class..." : "Add class"}
                 </button>
               </form>
             )}

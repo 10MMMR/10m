@@ -7,6 +7,7 @@ import {
   MicrophoneIcon,
   PaperClipIcon,
 } from "@heroicons/react/24/outline";
+import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Message } from "../_lib/workspace-data";
@@ -60,7 +61,7 @@ export function ChatPane({
 
   return (
     <aside
-      className={`relative flex min-h-96 min-w-0 flex-col overflow-hidden border-t border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:h-full lg:min-h-0 xl:border-t-0 xl:border-l xl:border-(--border-soft) ${
+      className={`relative flex min-h-96 min-w-0 flex-col overflow-hidden border-t border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:h-full lg:min-h-0 lg:rounded-2xl lg:border lg:border-(--border-soft) lg:bg-(--surface-base) ${
         locked
           ? "pointer-events-none select-none opacity-[0.55] grayscale-[0.85] saturate-[0.7]"
           : ""
@@ -84,30 +85,49 @@ export function ChatPane({
         ref={messageListRef}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-5 pb-40"
       >
-        {messages.map((message, index) => {
-          const isUser = message.side === "user";
+        {messages.length === 0 ? (
+          <div className="flex min-h-full items-center justify-center">
+            <div className="flex max-w-[600px] flex-col items-center text-center">
+              <Image
+                src="/duck-chat-no-bg.png"
+                alt="Duck mascot waiting for your first chat message"
+                width={600}
+                height={600}
+                className="h-auto w-[600px]"
+                priority
+              />
+              <p className="mt-4 text-base leading-7 font-bold text-(--text-muted)">
+                Open a note or PDF, then ask Study Assistant to explain, summarize,
+                or quiz you.
+              </p>
+            </div>
+          </div>
+        ) : (
+          messages.map((message, index) => {
+            const isUser = message.side === "user";
 
-          return (
-            isUser ? (
-              <div key={`${message.author}-${index}`} className="mb-4 flex justify-end">
-                <div className="max-w-[85%] rounded-2xl bg-(--main) px-4 py-3.5 text-(--text-contrast) shadow-md sm:max-w-[78%]">
-                  {message.text}
-                </div>
-              </div>
-            ) : (
-              <div
-                key={`${message.author}-${index}`}
-                className="mb-6 w-full text-(--text-main)"
-              >
-                <div className="chat-markdown w-full leading-8">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            return (
+              isUser ? (
+                <div key={`${message.author}-${index}`} className="mb-4 flex justify-end">
+                  <div className="max-w-[85%] rounded-2xl bg-(--main) px-4 py-3.5 text-(--text-contrast) shadow-md sm:max-w-[78%]">
                     {message.text}
-                  </ReactMarkdown>
+                  </div>
                 </div>
-              </div>
-            )
-          );
-        })}
+              ) : (
+                <div
+                  key={`${message.author}-${index}`}
+                  className="mb-6 w-full text-(--text-main)"
+                >
+                  <div className="chat-markdown w-full leading-8">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {message.text}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              )
+            );
+          })
+        )}
       </div>
 
       <div

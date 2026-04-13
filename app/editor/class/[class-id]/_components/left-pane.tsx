@@ -27,7 +27,7 @@ import {
   type TreeNode,
   type TreeNodeKind,
 } from "@/lib/tree-repository";
-import type { NoteSession } from "@/lib/supabase-note-session-repository";
+import type { WorkspaceSession } from "../_lib/workspace-sessions";
 
 export type TreeAddAction = "folder" | "note" | "upload";
 export type TreeMenuAction = "add" | "delete" | "generate-notes";
@@ -50,7 +50,7 @@ type LeftPaneProps = {
   selectedNodeIds: string[];
   selectedNodeId: string | null;
   classLabel: string;
-  sessions: NoteSession[];
+  sessions: WorkspaceSession[];
   onSelectSession: (sessionId: string) => void;
   onRequestDeleteSession: (sessionId: string) => void;
   onSelectNode: (nodeId: string, options: SelectTreeNodeOptions) => void;
@@ -591,7 +591,7 @@ export function LeftPane({
     return ids;
   }, [childrenByParent, expandedIds, rootNode]);
 
-  const asideClass = `flex min-h-0 flex-col overflow-x-visible overflow-y-hidden border-b border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:border-r lg:border-b-0 ${
+  const asideClass = `flex min-h-0 flex-col overflow-x-visible overflow-y-hidden border-b border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:rounded-2xl lg:border lg:border-(--border-soft) lg:bg-(--surface-base) ${
     locked
       ? "pointer-events-none select-none opacity-[0.55] grayscale-[0.85] saturate-[0.7]"
       : ""
@@ -1002,13 +1002,17 @@ export function LeftPane({
               <div key={session.id} className='group relative'>
                 <div className='flex items-center gap-1'>
                   <button
-                    draggable
+                    draggable={session.kind === "editor-note"}
                     className='w-full truncate rounded-lg px-2.5 py-1.5 text-left text-[13px] text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
                     onDragEnd={() => {
                       setDragSource(null);
                       setDropIndicator(null);
                     }}
                     onDragStart={() => {
+                      if (session.kind !== "editor-note") {
+                        return;
+                      }
+
                       setDragSource({
                         type: "session",
                         noteNodeId: session.noteNodeId,

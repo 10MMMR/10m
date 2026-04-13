@@ -8,6 +8,14 @@ import {
 } from "@/lib/note-document";
 import { moveNodeInTree, type TreeNode } from "@/lib/tree-repository";
 
+let mockSearchParams = new URLSearchParams();
+
+jest.mock("next/navigation", () => ({
+  useSearchParams: () => ({
+    get: (key: string) => mockSearchParams.get(key),
+  }),
+}));
+
 const getMockSupabaseClient = () =>
   (globalThis as typeof globalThis & { __mockSupabaseClient?: unknown })
     .__mockSupabaseClient ?? null;
@@ -149,6 +157,19 @@ jest.mock("./editor-pane", () => ({
       <button onClick={onDelete} type="button">
         Delete draft
       </button>
+    </div>
+  ),
+}));
+
+jest.mock("./flashcard-view", () => ({
+  FlashcardView: ({
+    session,
+  }: {
+    session: { id: string; title: string };
+  }) => (
+    <div data-testid="flashcard-view">
+      <p data-testid="flashcard-session-id">{session.id}</p>
+      <p data-testid="flashcard-session-title">{session.title}</p>
     </div>
   ),
 }));
@@ -695,6 +716,7 @@ describe("WorkspaceShell note flow", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     window.localStorage.clear();
+    mockSearchParams = new URLSearchParams();
     confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(true);
     idCounter = 0;
     (globalThis.crypto.randomUUID as jest.Mock)
@@ -1714,6 +1736,32 @@ describe("WorkspaceShell note flow", () => {
     });
   });
 
+  test("deleting a mock flashcard session dismisses it without deleting persisted note sessions", async () => {
+    renderWorkspace();
+
+    const flashcardSessionButton = await screen.findByRole("button", {
+      name: "AI Fundamentals Flashcards",
+    });
+    fireEvent.click(flashcardSessionButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("flashcard-view")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open session menu" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "AI Fundamentals Flashcards" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(fakeSupabase.__noteSessionRows).toHaveLength(0);
+  });
+
   test("deleting a session removes only the session and re-exposes the linked note in the tree", async () => {
     seedTree(fakeSupabase, [
       {
@@ -1756,9 +1804,12 @@ describe("WorkspaceShell note flow", () => {
     renderWorkspace();
 
     expect(await screen.findByRole("button", { name: "Session note" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Open menu" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Open menu" }).length).toBeGreaterThanOrEqual(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open session menu" }));
+    const sessionButton = screen.getByRole("button", { name: "Session note" });
+    const sessionRow = sessionButton.closest(".group");
+    expect(sessionRow).toBeTruthy();
+    fireEvent.click(within(sessionRow as HTMLElement).getByRole("button", { name: "Open session menu" }));
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
     const dialog = await screen.findByRole("dialog");
@@ -1840,7 +1891,7 @@ describe("WorkspaceShell note flow", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("button", { name: "Open menu" }).length).toBeGreaterThanOrEqual(2);
     });
-    expect(screen.queryByRole("button", { name: "Open session menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Session note" })).not.toBeInTheDocument();
     expect(fakeSupabase.__treeRows.find((row) => row.id === "session-note-node")).toBeDefined();
   });
 

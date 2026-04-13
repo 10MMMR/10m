@@ -13,7 +13,7 @@ The system is a **minimalist modern** style with a warm, premium feel:
 - subtle texture and depth instead of flat surfaces
 - deliberate asymmetry to avoid generic layouts
 - restrained motion that makes the interface feel alive
-- dual-font typography with clear hierarchy
+- satoshi-led typography with clear hierarchy
 
 The goal is to feel **professional, design-forward, and memorable** without becoming busy or ornamental.
 
@@ -58,12 +58,12 @@ Use it sparingly, but with clear intent, on:
 
 ## Typography
 
-- **Display font:** `Calistoga`
+- **Display font:** `Satoshi Black` and `Satoshi Bold`
   - Use for hero headlines and major section headings.
   - Keep it expressive and sparse.
-- **Body/UI font:** `Inter`
+- **Body/UI font:** `Satoshi Regular` and `Satoshi Medium`
   - Use for body copy, labels, inputs, and most interface text.
-- **Monospace font:** `JetBrains Mono`
+- **Label font:** `Satoshi Medium`
   - Use for section labels, badges, and technical callouts.
 
 Rules:
@@ -126,7 +126,7 @@ Use a consistent pill badge at the start of major sections:
 
 - rounded shape
 - small accent dot
-- uppercase monospace text
+- uppercase label text in Satoshi Medium
 - light tinted background
 
 ## Motion

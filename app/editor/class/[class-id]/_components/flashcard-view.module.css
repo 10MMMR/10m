@@ -1,0 +1,26 @@
+.flipCard {
+  perspective: 1400px;
+}
+
+.flipInner {
+  height: 100%;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  width: 100%;
+}
+
+.flipped {
+  transform: rotateY(-180deg);
+}
+
+.face {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  inset: 0;
+  position: absolute;
+}
+
+.back {
+  transform: rotateY(-180deg);
+}

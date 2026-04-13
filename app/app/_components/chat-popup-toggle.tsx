@@ -138,7 +138,7 @@ export function ChatPopupToggle() {
     readPopupOpenState,
     () => false,
   );
-  const activeSection = useSyncExternalStore(
+  const activeSection = useSyncExternalStore<PopupSection>(
     subscribeToPopupState,
     readPopupSectionState,
     () => "home",

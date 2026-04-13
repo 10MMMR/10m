@@ -366,19 +366,31 @@ function isValidMark(
     const attrs = value.attrs;
     const keys = Object.keys(attrs);
 
-    if (keys.some((key) => key !== "fontSize")) {
+    if (keys.some((key) => key !== "fontSize" && key !== "fontFamily")) {
       return false;
     }
 
-    if (isAbsent(attrs.fontSize)) {
-      return true;
+    if (!isAbsent(attrs.fontSize)) {
+      if (typeof attrs.fontSize !== "string") {
+        return false;
+      }
+
+      if (!/^\d+(?:\.\d+)?px$/.test(attrs.fontSize)) {
+        return false;
+      }
     }
 
-    if (typeof attrs.fontSize !== "string") {
-      return false;
+    if (!isAbsent(attrs.fontFamily)) {
+      if (typeof attrs.fontFamily !== "string") {
+        return false;
+      }
+
+      if (attrs.fontFamily.trim().length === 0) {
+        return false;
+      }
     }
 
-    return /^\d+(?:\.\d+)?px$/.test(attrs.fontSize);
+    return true;
   }
 
   return Object.keys(value.attrs).length === 0;

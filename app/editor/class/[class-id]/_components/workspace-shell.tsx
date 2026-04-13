@@ -2,6 +2,7 @@
 
 import { ChatBubbleLeftEllipsisIcon } from "@heroicons/react/24/outline";
 import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
+import { useSearchParams } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -9,9 +10,12 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type PointerEvent as ReactPointerEvent,
+  type TransitionEvent as ReactTransitionEvent,
 } from "react";
 import { ChatPane } from "./chat-pane";
 import { EditorPane } from "./editor-pane";
+import { FlashcardView } from "./flashcard-view";
 import {
   LeftPane,
   type SelectTreeNodeOptions,
@@ -19,6 +23,11 @@ import {
   type TreeMenuAction,
 } from "./left-pane";
 import { getWorkspaceSeed, type Message } from "../_lib/workspace-data";
+import {
+  getMockFlashcardSessions,
+  toEditorNoteWorkspaceSession,
+  type WorkspaceSession,
+} from "../_lib/workspace-sessions";
 import type { AssistantCommand } from "@/lib/ai/assistant-contract";
 import {
   EMPTY_NOTE_DOCUMENT,
@@ -63,6 +72,17 @@ const MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024;
 const PDF_SIGNED_URL_TTL_SECONDS = 60 * 60;
 const AUTH_REQUIRED_MESSAGE = "Sign in with Google to access notes.";
 const STORAGE_NOT_CONFIGURED_MESSAGE = "Supabase storage is not configured.";
+const LEFT_PANE_WIDTH_STORAGE_KEY = "editor-layout-left-pane-width";
+const RIGHT_PANE_WIDTH_STORAGE_KEY = "editor-layout-right-pane-width";
+const LEFT_PANE_DEFAULT_WIDTH_PX = 280;
+const RIGHT_PANE_DEFAULT_WIDTH_PX = 340;
+const LEFT_PANE_COLLAPSED_WIDTH_PX = 60;
+const LEFT_PANE_MIN_WIDTH_PX = 220;
+const LEFT_PANE_MAX_WIDTH_PX = 560;
+const RIGHT_PANE_MIN_WIDTH_PX = 300;
+const RIGHT_PANE_MAX_WIDTH_PX = 680;
+const CENTER_PANE_MIN_WIDTH_PX = 560;
+const GRID_CHROME_ALLOWANCE_PX = 48;
 
 type WorkspaceShellProps = {
   classId: string;
@@ -82,6 +102,7 @@ type DeleteConfirmationState = {
 };
 
 type SessionDeleteConfirmationState = {
+  kind: WorkspaceSession["kind"];
   sessionId: string;
   message: string;
 };
@@ -170,6 +191,50 @@ type GenerationSourceSnapshot = {
   pdfTitles: string[];
   unitTitles: string[];
 };
+
+type ResizeSide = "left" | "right";
+
+function clampToRange(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function readStoredWidth(storageKey: string, fallback: number) {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+
+  let rawWidth: string | null = null;
+
+  try {
+    rawWidth = window.sessionStorage.getItem(storageKey);
+  } catch {
+    return fallback;
+  }
+
+  if (!rawWidth) {
+    return fallback;
+  }
+
+  const parsedWidth = Number.parseFloat(rawWidth);
+
+  if (!Number.isFinite(parsedWidth)) {
+    return fallback;
+  }
+
+  return parsedWidth;
+}
+
+function writeStoredWidth(storageKey: string, value: number) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(storageKey, String(Math.round(value)));
+  } catch {
+    // Ignore storage write errors in restricted environments.
+  }
+}
 
 function getSelectableFiles(nodes: TreeNode[], selectedIds: string[]) {
   const childrenByParent = new Map<string, TreeNode[]>();
@@ -623,6 +688,8 @@ export function WorkspaceShell({
   imageStorageBucket,
   pdfStorageBucket,
 }: WorkspaceShellProps) {
+  const searchParams = useSearchParams();
+  const shouldOpenAnalysisFromQuery = searchParams.get("analysis") === "1";
   const workspace = getWorkspaceSeed(classId);
   const treeRepository = useRef<SupabaseTreeRepository | null>(
     supabase ? new SupabaseTreeRepository(supabase) : null,
@@ -655,6 +722,10 @@ export function WorkspaceShell({
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] =
     useState<SessionDeleteConfirmationState | null>(null);
   const [noteSessions, setNoteSessions] = useState<NoteSession[]>([]);
+  const [dismissedMockSessionIds, setDismissedMockSessionIds] = useState<string[]>(
+    [],
+  );
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [isSessionStorageAvailable, setIsSessionStorageAvailable] = useState(true);
   const [chatSessions, setChatSessions] = useState<Record<string, Message[]>>(
     {},
@@ -681,32 +752,120 @@ export function WorkspaceShell({
     Partial<Record<RateLimitedAction, number>>
   >({});
   const [cooldownTick, setCooldownTick] = useState(0);
+  const [leftPaneWidthPx, setLeftPaneWidthPx] = useState(() =>
+    clampToRange(
+      readStoredWidth(LEFT_PANE_WIDTH_STORAGE_KEY, LEFT_PANE_DEFAULT_WIDTH_PX),
+      LEFT_PANE_MIN_WIDTH_PX,
+      LEFT_PANE_MAX_WIDTH_PX,
+    ),
+  );
+  const [rightPaneWidthPx, setRightPaneWidthPx] = useState(() =>
+    clampToRange(
+      readStoredWidth(RIGHT_PANE_WIDTH_STORAGE_KEY, RIGHT_PANE_DEFAULT_WIDTH_PX),
+      RIGHT_PANE_MIN_WIDTH_PX,
+      RIGHT_PANE_MAX_WIDTH_PX,
+    ),
+  );
+  const [isLeftLayoutTransitioning, setIsLeftLayoutTransitioning] = useState(false);
+  const [activeResizeSide, setActiveResizeSide] = useState<ResizeSide | null>(null);
+  const layoutGridRef = useRef<HTMLDivElement>(null);
+  const resizePointerIdRef = useRef<number | null>(null);
+  const resizeStartXRef = useRef(0);
+  const resizeStartLeftWidthRef = useRef(LEFT_PANE_DEFAULT_WIDTH_PX);
+  const resizeStartRightWidthRef = useRef(RIGHT_PANE_DEFAULT_WIDTH_PX);
+  const resizeFrameRef = useRef<number | null>(null);
+  const resizePendingClientXRef = useRef<number | null>(null);
+  const hasAppliedAnalysisQueryRef = useRef(false);
 
-  const desktopGridColumns = isLeftPaneCollapsed
-    ? isChatOpen
-      ? "xl:grid-cols-[60px_minmax(0,1fr)_340px]"
-      : "xl:grid-cols-[60px_minmax(0,1fr)]"
-    : isChatOpen
-      ? "xl:grid-cols-[280px_minmax(0,1fr)_340px]"
-      : "xl:grid-cols-[280px_minmax(0,1fr)]";
+  const isRightPaneSeparateColumn = isXlViewport && isChatOpen;
+  const isResizeMode = activeResizeSide !== null;
+  const leftColumnWidthPx = isLeftPaneCollapsed
+    ? LEFT_PANE_COLLAPSED_WIDTH_PX
+    : leftPaneWidthPx;
+  const showLeftResizeHandle = isLgViewport;
+  const canResizeLeftPane =
+    isLgViewport && !isLeftPaneCollapsed && !isLeftLayoutTransitioning;
+  const canResizeRightPane = isRightPaneSeparateColumn;
+  const canDragRightPane = canResizeRightPane && !isLeftLayoutTransitioning;
 
-  const desktopGridTemplateColumns = isLeftPaneCollapsed
-    ? isXlViewport && isChatOpen
-      ? "60px minmax(0,1fr) 340px"
-      : "60px minmax(0,1fr)"
-    : isXlViewport && isChatOpen
-      ? "280px minmax(0,1fr) 340px"
-      : isXlViewport
-        ? "280px minmax(0,1fr)"
-        : "250px minmax(0,1fr)";
+  const getLayoutWidth = useCallback(() => {
+    const gridWidth = layoutGridRef.current?.getBoundingClientRect().width ?? 0;
+
+    if (!Number.isFinite(gridWidth) || gridWidth <= 0) {
+      return 0;
+    }
+
+    return gridWidth;
+  }, []);
+
+  const clampLeftPaneWidth = useCallback(
+    (nextWidth: number, rightWidth: number) => {
+      const layoutWidth = getLayoutWidth();
+
+      if (layoutWidth <= 0) {
+        return clampToRange(nextWidth, LEFT_PANE_MIN_WIDTH_PX, LEFT_PANE_MAX_WIDTH_PX);
+      }
+
+      const dynamicMax = Math.floor(
+        layoutWidth -
+          CENTER_PANE_MIN_WIDTH_PX -
+          (isRightPaneSeparateColumn ? rightWidth : 0) -
+          GRID_CHROME_ALLOWANCE_PX,
+      );
+      const maxWidth = Math.min(LEFT_PANE_MAX_WIDTH_PX, dynamicMax);
+
+      return clampToRange(nextWidth, LEFT_PANE_MIN_WIDTH_PX, Math.max(LEFT_PANE_MIN_WIDTH_PX, maxWidth));
+    },
+    [getLayoutWidth, isRightPaneSeparateColumn],
+  );
+
+  const clampRightPaneWidth = useCallback(
+    (nextWidth: number, leftWidth: number) => {
+      const layoutWidth = getLayoutWidth();
+
+      if (layoutWidth <= 0) {
+        return clampToRange(nextWidth, RIGHT_PANE_MIN_WIDTH_PX, RIGHT_PANE_MAX_WIDTH_PX);
+      }
+
+      const dynamicMax = Math.floor(
+        layoutWidth - CENTER_PANE_MIN_WIDTH_PX - leftWidth - GRID_CHROME_ALLOWANCE_PX,
+      );
+      const maxWidth = Math.min(RIGHT_PANE_MAX_WIDTH_PX, dynamicMax);
+
+      return clampToRange(nextWidth, RIGHT_PANE_MIN_WIDTH_PX, Math.max(RIGHT_PANE_MIN_WIDTH_PX, maxWidth));
+    },
+    [getLayoutWidth],
+  );
+
+  const desktopGridTemplateColumns = useMemo(() => {
+    if (isRightPaneSeparateColumn) {
+      return `${leftColumnWidthPx}px minmax(0,1fr) ${rightPaneWidthPx}px`;
+    }
+
+    return `${leftColumnWidthPx}px minmax(0,1fr)`;
+  }, [isRightPaneSeparateColumn, leftColumnWidthPx, rightPaneWidthPx]);
 
   const rootNode = useMemo(
     () => treeNodes.find((node) => node.kind === "root") ?? null,
     [treeNodes],
   );
+  const mockFlashcardSessions = useMemo(
+    () =>
+      getMockFlashcardSessions(classId).filter(
+        (session) => !dismissedMockSessionIds.includes(session.id),
+      ),
+    [classId, dismissedMockSessionIds],
+  );
+  const workspaceSessions = useMemo(
+    () => [
+      ...mockFlashcardSessions,
+      ...noteSessions.map((session) => toEditorNoteWorkspaceSession(session)),
+    ],
+    [mockFlashcardSessions, noteSessions],
+  );
   const sessionById = useMemo(
-    () => new Map(noteSessions.map((session) => [session.id, session])),
-    [noteSessions],
+    () => new Map(workspaceSessions.map((session) => [session.id, session])),
+    [workspaceSessions],
   );
   const sessionNoteNodeIds = useMemo(
     () => new Set(noteSessions.map((session) => session.noteNodeId)),
@@ -721,6 +880,19 @@ export function WorkspaceShell({
   );
 
   const activeEditorNote = selectedNodeKind === "note" ? draftNoteNode : null;
+  const activeFlashcardSession = useMemo(() => {
+    if (!selectedSessionId) {
+      return null;
+    }
+
+    const session = sessionById.get(selectedSessionId);
+
+    if (!session || session.kind !== "flashcard") {
+      return null;
+    }
+
+    return session;
+  }, [selectedSessionId, sessionById]);
   const selectedFileNode = useMemo(() => {
     if (selectedNodeKind !== "file" || !selectedNodeId) {
       return null;
@@ -775,6 +947,40 @@ export function WorkspaceShell({
   const draftNoteImageStoragePathsRef = useRef(draftNoteImageStoragePaths);
 
   useEffect(() => {
+    if (classId) {
+      hasAppliedAnalysisQueryRef.current = false;
+    }
+  }, [classId]);
+
+  useEffect(() => {
+    if (!shouldOpenAnalysisFromQuery || hasAppliedAnalysisQueryRef.current) {
+      return;
+    }
+
+    const flashcardSession = workspaceSessions.find(
+      (session) => session.kind === "flashcard",
+    );
+
+    if (!flashcardSession) {
+      return;
+    }
+
+    hasAppliedAnalysisQueryRef.current = true;
+
+    setSelectedSessionId(flashcardSession.id);
+    setSelectedNodeIds([]);
+    setSelectedNodeId(null);
+    setSelectedNodeKind(null);
+    setSelectionAnchorId(null);
+    setDraftNoteNode(null);
+    setSelectedPdfUrl(null);
+    setIsDirty(false);
+  }, [
+    shouldOpenAnalysisFromQuery,
+    workspaceSessions,
+  ]);
+
+  useEffect(() => {
     const hasActiveCooldown = Object.values(actionCooldowns).some(
       (retryAtMs) => Boolean(retryAtMs && retryAtMs > Date.now()),
     );
@@ -793,6 +999,8 @@ export function WorkspaceShell({
   const resetWorkspaceState = useCallback(() => {
     setTreeNodes([]);
     setNoteSessions([]);
+    setDismissedMockSessionIds([]);
+    setSelectedSessionId(null);
     setIsSessionStorageAvailable(true);
     setSelectedNodeIds([]);
     setSelectedNodeId(null);
@@ -1182,6 +1390,175 @@ export function WorkspaceShell({
   }, []);
 
   useEffect(() => {
+    if (isLgViewport) {
+      return;
+    }
+
+    if (isLeftLayoutTransitioning) {
+      setIsLeftLayoutTransitioning(false);
+    }
+  }, [isLeftLayoutTransitioning, isLgViewport]);
+
+  useEffect(() => {
+    writeStoredWidth(LEFT_PANE_WIDTH_STORAGE_KEY, leftPaneWidthPx);
+  }, [leftPaneWidthPx]);
+
+  useEffect(() => {
+    writeStoredWidth(RIGHT_PANE_WIDTH_STORAGE_KEY, rightPaneWidthPx);
+  }, [rightPaneWidthPx]);
+
+  useEffect(() => {
+    if (!isLgViewport || isLeftPaneCollapsed) {
+      return;
+    }
+
+    setLeftPaneWidthPx((currentWidth) =>
+      clampLeftPaneWidth(currentWidth, rightPaneWidthPx),
+    );
+  }, [
+    clampLeftPaneWidth,
+    isLeftPaneCollapsed,
+    isLgViewport,
+    rightPaneWidthPx,
+  ]);
+
+  useEffect(() => {
+    if (!isRightPaneSeparateColumn) {
+      return;
+    }
+
+    setRightPaneWidthPx((currentWidth) =>
+      clampRightPaneWidth(currentWidth, leftColumnWidthPx),
+    );
+  }, [clampRightPaneWidth, isRightPaneSeparateColumn, leftColumnWidthPx]);
+
+  useEffect(() => {
+    if (!isLgViewport) {
+      return;
+    }
+
+    const gridNode = layoutGridRef.current;
+
+    if (!gridNode) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      if (!isLeftPaneCollapsed) {
+        setLeftPaneWidthPx((currentWidth) =>
+          clampLeftPaneWidth(currentWidth, rightPaneWidthPx),
+        );
+      }
+
+      if (isRightPaneSeparateColumn) {
+        setRightPaneWidthPx((currentWidth) =>
+          clampRightPaneWidth(currentWidth, leftColumnWidthPx),
+        );
+      }
+    });
+
+    observer.observe(gridNode);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [
+    clampLeftPaneWidth,
+    clampRightPaneWidth,
+    isLeftPaneCollapsed,
+    isLgViewport,
+    isRightPaneSeparateColumn,
+    leftColumnWidthPx,
+    rightPaneWidthPx,
+  ]);
+
+  useEffect(() => {
+    if (!activeResizeSide) {
+      return;
+    }
+
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (
+        resizePointerIdRef.current !== null &&
+        resizePointerIdRef.current !== event.pointerId
+      ) {
+        return;
+      }
+
+      resizePendingClientXRef.current = event.clientX;
+
+      if (resizeFrameRef.current !== null) {
+        return;
+      }
+
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        resizeFrameRef.current = null;
+        const pendingClientX = resizePendingClientXRef.current;
+
+        if (pendingClientX === null) {
+          return;
+        }
+
+        const deltaX = pendingClientX - resizeStartXRef.current;
+
+        if (activeResizeSide === "left") {
+          const nextWidth = resizeStartLeftWidthRef.current + deltaX;
+          setLeftPaneWidthPx(clampLeftPaneWidth(nextWidth, rightPaneWidthPx));
+          return;
+        }
+
+        const nextWidth = resizeStartRightWidthRef.current - deltaX;
+        setRightPaneWidthPx(clampRightPaneWidth(nextWidth, leftColumnWidthPx));
+      });
+    };
+
+    const stopResize = (event: PointerEvent) => {
+      if (
+        resizePointerIdRef.current !== null &&
+        resizePointerIdRef.current !== event.pointerId
+      ) {
+        return;
+      }
+
+      resizePointerIdRef.current = null;
+      resizePendingClientXRef.current = null;
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      setActiveResizeSide(null);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+
+    return () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      resizePendingClientXRef.current = null;
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+  }, [
+    activeResizeSide,
+    clampLeftPaneWidth,
+    clampRightPaneWidth,
+    leftColumnWidthPx,
+    rightPaneWidthPx,
+  ]);
+
+  useEffect(() => {
     resetWorkspaceState();
     setIsDirty(false);
     chatAbortControllerRef.current?.abort();
@@ -1437,6 +1814,7 @@ export function WorkspaceShell({
   };
 
   const handleSelectNode = (nodeId: string, options: SelectTreeNodeOptions) => {
+    setSelectedSessionId(null);
     const node = treeNodes.find((item) => item.id === nodeId);
 
     if (!node) {
@@ -2144,7 +2522,7 @@ export function WorkspaceShell({
     const session = sessionById.get(sessionId);
     const sessionRepository = noteSessionRepository.current;
 
-    if (!session || !sessionRepository) {
+    if (!session || session.kind !== "editor-note" || !sessionRepository) {
       return;
     }
 
@@ -2208,6 +2586,7 @@ export function WorkspaceShell({
 
     setDeleteConfirmation(null);
     setSessionDeleteConfirmation({
+      kind: session.kind,
       sessionId,
       message: `Delete ${session.title} from Sessions?`,
     });
@@ -2218,11 +2597,17 @@ export function WorkspaceShell({
       return;
     }
 
-    const { sessionId } = sessionDeleteConfirmation;
+    const { kind, sessionId } = sessionDeleteConfirmation;
     const sessionRepository = noteSessionRepository.current;
     setSessionDeleteConfirmation(null);
 
     try {
+      if (kind === "flashcard") {
+        setDismissedMockSessionIds((current) => [...current, sessionId]);
+        setSelectedSessionId((current) => (current === sessionId ? null : current));
+        return;
+      }
+
       if (typeof sessionRepository?.deleteById === "function") {
         await sessionRepository.deleteById({
           classId,
@@ -2243,6 +2628,7 @@ export function WorkspaceShell({
       }
 
       setNoteSessions((current) => current.filter((item) => item.id !== sessionId));
+      setSelectedSessionId((current) => (current === sessionId ? null : current));
     } catch (error) {
       if (isSessionTableUnavailableError(error)) {
         setIsSessionStorageAvailable(false);
@@ -2767,6 +3153,14 @@ export function WorkspaceShell({
       return;
     }
 
+    setSelectedSessionId(session.id);
+
+    if (session.kind === "flashcard") {
+      syncSelectionState(treeNodesRef.current, [], null);
+      setSelectionAnchorId(null);
+      return;
+    }
+
     const targetNode = treeNodesRef.current.find(
       (node) => node.id === session.noteNodeId && node.kind === "note",
     );
@@ -2790,6 +3184,69 @@ export function WorkspaceShell({
     setSelectionAnchorId(selectedNodeId);
   };
 
+  const handleCollapseLeftPane = () => {
+    if (isLeftPaneCollapsed) {
+      return;
+    }
+
+    setIsLeftLayoutTransitioning(true);
+    setIsLeftPaneCollapsed(true);
+  };
+
+  const handleExpandLeftPane = () => {
+    if (!isLeftPaneCollapsed) {
+      return;
+    }
+
+    setIsLeftLayoutTransitioning(true);
+    setIsLeftPaneCollapsed(false);
+  };
+
+  const startPaneResize =
+    (side: ResizeSide) => (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      if (side === "left" && !canResizeLeftPane) {
+        return;
+      }
+
+      if (side === "right" && !canDragRightPane) {
+        return;
+      }
+
+      event.preventDefault();
+      resizePointerIdRef.current = event.pointerId;
+      resizeStartXRef.current = event.clientX;
+      resizeStartLeftWidthRef.current = leftPaneWidthPx;
+      resizeStartRightWidthRef.current = rightPaneWidthPx;
+      setActiveResizeSide(side);
+    };
+
+  const handleGridTransitionEnd = (
+    event: ReactTransitionEvent<HTMLDivElement>,
+  ) => {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    if (event.propertyName !== "grid-template-columns") {
+      return;
+    }
+
+    setIsLeftLayoutTransitioning(false);
+  };
+
+  const gridTransitionClass = isResizeMode
+    ? "transition-none"
+    : "transition-[grid-template-columns] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]";
+  const handleMotionClass = isResizeMode
+    ? "transition-colors duration-150"
+    : "transition-[left,background-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]";
+  const leftResizeHandleOffsetPx = leftColumnWidthPx + 8;
+  const rightResizeHandleOffsetPx = rightPaneWidthPx + 16;
+
   return (
     <main className='workspace-shell flex h-screen flex-col overflow-hidden'>
       <FloatingPopupBanner
@@ -2808,7 +3265,9 @@ export function WorkspaceShell({
         type='file'
       />
       <div
-        className={`grid min-h-0 flex-1 grid-cols-1 transition-[grid-template-columns] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${isLeftPaneCollapsed ? "lg:grid-cols-[60px_minmax(0,1fr)]" : "lg:grid-cols-[250px_minmax(0,1fr)]"} ${desktopGridColumns}`}
+        ref={layoutGridRef}
+        className={`relative grid min-h-0 flex-1 grid-cols-1 ${gridTransitionClass} lg:gap-2 lg:bg-(--border-soft) lg:p-2`}
+        onTransitionEnd={handleGridTransitionEnd}
         style={
           isLgViewport
             ? {
@@ -2822,15 +3281,15 @@ export function WorkspaceShell({
           locked={lockIn}
           collapsed={isLeftPaneCollapsed}
           isLgViewport={isLgViewport}
-          onCollapse={() => setIsLeftPaneCollapsed(true)}
-          onExpand={() => setIsLeftPaneCollapsed(false)}
+          onCollapse={handleCollapseLeftPane}
+          onExpand={handleExpandLeftPane}
           treeNodes={visibleTreeNodes}
           allTreeNodesForDrop={treeNodes}
           expandedIds={expandedIds}
           selectedNodeIds={selectedNodeIds}
           selectedNodeId={selectedNodeId}
           classLabel={workspace.classLabel}
-          sessions={noteSessions}
+          sessions={workspaceSessions}
           onSelectSession={handleSelectSession}
           onRequestDeleteSession={handleRequestDeleteSession}
           onSelectNode={handleSelectNode}
@@ -2843,34 +3302,38 @@ export function WorkspaceShell({
           onMoveNode={handleMoveNode}
           onMoveSessionToTree={handleMoveSessionToTree}
         />
-        <EditorPane
-          lockIn={lockIn}
-          onToggleLockIn={() => setLockIn((current) => !current)}
-          isNoteLoading={isLoadingSelectedNote}
-          noteId={selectedNodeKind === "note" ? selectedNodeId : null}
-          note={
-            activeEditorNote && activeEditorNote.contentJson !== undefined
-              ? {
-                  title: activeEditorNote.title,
-                  contentJson: activeEditorNote.contentJson,
-                  createdAt: activeEditorNote.createdAt,
-                  updatedAt: activeEditorNote.updatedAt,
-                }
-              : null
-          }
-          pdfDocument={activePdfDocument}
-          isDirty={isDirty}
-          onTitleChange={handleTitleChange}
-          onBodyChange={handleBodyChange}
-          onUploadImage={handleUploadImage}
-          onSave={handleSaveNote}
-          onDelete={handleDeleteCurrentNote}
-          saveLabel='Save note'
-          titleLabel='Note title'
-          titlePlaceholder='Untitled note'
-          emptyStateTitle='No note selected'
-          emptyStateDescription='Create or select a note from the tree to start writing.'
-        />
+        {activeFlashcardSession ? (
+          <FlashcardView key={activeFlashcardSession.id} session={activeFlashcardSession} />
+        ) : (
+          <EditorPane
+            lockIn={lockIn}
+            onToggleLockIn={() => setLockIn((current) => !current)}
+            isNoteLoading={isLoadingSelectedNote}
+            noteId={selectedNodeKind === "note" ? selectedNodeId : null}
+            note={
+              activeEditorNote && activeEditorNote.contentJson !== undefined
+                ? {
+                    title: activeEditorNote.title,
+                    contentJson: activeEditorNote.contentJson,
+                    createdAt: activeEditorNote.createdAt,
+                    updatedAt: activeEditorNote.updatedAt,
+                  }
+                : null
+            }
+            pdfDocument={activePdfDocument}
+            isDirty={isDirty}
+            onTitleChange={handleTitleChange}
+            onBodyChange={handleBodyChange}
+            onUploadImage={handleUploadImage}
+            onSave={handleSaveNote}
+            onDelete={handleDeleteCurrentNote}
+            saveLabel='Save note'
+            titleLabel='Note title'
+            titlePlaceholder='Untitled note'
+            emptyStateTitle='No note selected'
+            emptyStateDescription='Create or select a note from the tree to start writing.'
+          />
+        )}
         {isChatOpen ? (
           <div className='relative h-full min-h-0 min-w-0 overflow-hidden lg:col-span-2 xl:col-span-1'>
             <ChatPane
@@ -2886,7 +3349,47 @@ export function WorkspaceShell({
             />
           </div>
         ) : null}
+        {showLeftResizeHandle ? (
+          <button
+            aria-label='Resize left pane width'
+            className={`group absolute top-2 bottom-2 z-30 hidden w-2 cursor-col-resize border-0 bg-transparent hover:bg-(--surface-main-faint) lg:block ${handleMotionClass} ${
+              canResizeLeftPane ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-70"
+            }`}
+            onPointerDown={startPaneResize("left")}
+            style={{ left: `${leftResizeHandleOffsetPx}px` }}
+            type='button'
+          >
+            {!isLeftPaneCollapsed ? (
+              <span
+                className='pointer-events-none absolute top-1/2 left-1/2 h-12 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-(--border-strong) opacity-80 transition-colors duration-150 group-hover:bg-(--main)'
+                aria-hidden='true'
+              />
+            ) : null}
+          </button>
+        ) : null}
+        {canResizeRightPane ? (
+          <button
+            aria-label='Resize right pane width'
+            className={`group absolute top-2 bottom-2 z-30 hidden w-2 cursor-col-resize border-0 bg-transparent hover:bg-(--surface-main-faint) xl:block ${handleMotionClass} ${
+              canDragRightPane ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-70"
+            }`}
+            onPointerDown={startPaneResize("right")}
+            style={{ left: `calc(100% - ${rightResizeHandleOffsetPx}px)` }}
+            type='button'
+          >
+            <span
+              className='pointer-events-none absolute top-1/2 left-1/2 h-12 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-(--border-strong) opacity-80 transition-colors duration-150 group-hover:bg-(--main)'
+              aria-hidden='true'
+            />
+          </button>
+        ) : null}
       </div>
+      {activeResizeSide ? (
+        <div
+          className='fixed inset-0 z-50 cursor-col-resize'
+          aria-hidden='true'
+        />
+      ) : null}
 
       {!isChatOpen ? (
         <button
@@ -2957,8 +3460,9 @@ export function WorkspaceShell({
               {sessionDeleteConfirmation.message}
             </h2>
             <p className='mt-3 text-sm leading-6 text-(--text-body)'>
-              This removes the session from this list but keeps its linked note in
-              the class tree.
+              {sessionDeleteConfirmation.kind === "editor-note"
+                ? "This removes the session from this list but keeps its linked note in the class tree."
+                : "This removes the mock flashcard session from this list for the current workspace view."}
             </p>
             <div className='mt-6 flex items-center justify-end gap-3'>
               <button

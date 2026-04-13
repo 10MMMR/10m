@@ -41,6 +41,7 @@ type MockChain = {
   setTextAlign: (value: string) => MockChain;
   setLineHeight: (value: string) => MockChain;
   setFontSize: (value: string) => MockChain;
+  setFontFamily: (value: string) => MockChain;
   insertTable: (options?: { rows?: number; cols?: number; withHeaderRow?: boolean }) => MockChain;
   addRowBefore: () => MockChain;
   addRowAfter: () => MockChain;
@@ -73,6 +74,11 @@ type MockEditor = {
   isActive: (name: string) => boolean;
   off: (event: string, callback: () => void) => void;
   on: (event: string, callback: () => void) => void;
+  state: {
+    selection: {
+      empty: boolean;
+    };
+  };
   setEditable: (value: boolean) => void;
 };
 
@@ -246,6 +252,7 @@ jest.mock("@tiptap/react", () => {
       textAlign: "left",
       underline: false,
       updateHandler: onUpdate,
+      fontFamily: "",
       fontSize: "17px",
       json: initialContent,
     };
@@ -384,6 +391,10 @@ jest.mock("@tiptap/react", () => {
           apply(true, () => {
             state.fontSize = value;
           }),
+        setFontFamily: (value: string) =>
+          apply(true, () => {
+            state.fontFamily = value;
+          }),
         insertTable: (options) =>
           apply(true, () => {
             state.table = true;
@@ -487,13 +498,19 @@ jest.mock("@tiptap/react", () => {
         },
         updateAttributes: (type, attributes) => {
           updateNodeAttributes(type, attributes);
+          if (type === "textStyle" && typeof attributes.fontFamily === "string") {
+            state.fontFamily = attributes.fontFamily;
+          }
           emit("transaction");
           state.updateHandler?.({ editor });
         },
       },
       getAttributes: (name) => {
         if (name === "textStyle") {
-          return { fontSize: state.fontSize } as Record<string, string | boolean | null>;
+          return {
+            fontFamily: state.fontFamily,
+            fontSize: state.fontSize,
+          } as Record<string, string | boolean | null>;
         }
 
         if (name === "orderedList") {
@@ -529,6 +546,11 @@ jest.mock("@tiptap/react", () => {
         const callbacks = listeners.get(event) ?? new Set<() => void>();
         callbacks.add(callback);
         listeners.set(event, callbacks);
+      },
+      state: {
+        selection: {
+          empty: false,
+        },
       },
       setEditable: () => {},
     };

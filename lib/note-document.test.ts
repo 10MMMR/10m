@@ -74,3 +74,80 @@ describe("parseNoteDocument textStyle validation", () => {
     ).toThrow("Invalid note document.");
   });
 });
+
+describe("parseNoteDocument table validation", () => {
+  test("rejects tableCell content with direct text nodes", () => {
+    expect(() =>
+      parseNoteDocument({
+        type: "doc",
+        content: [{
+          type: "table",
+          content: [{
+            type: "tableRow",
+            content: [{
+              type: "tableCell",
+              content: [{ type: "text", text: "Invalid" }],
+            }],
+          }],
+        }],
+      }),
+    ).toThrow("Invalid note document.");
+  });
+
+  test("rejects tableRow content with non-cell children", () => {
+    expect(() =>
+      parseNoteDocument({
+        type: "doc",
+        content: [{
+          type: "table",
+          content: [{
+            type: "tableRow",
+            content: [{ type: "paragraph" }],
+          }],
+        }],
+      }),
+    ).toThrow("Invalid note document.");
+  });
+
+  test("rejects table content with non-row children", () => {
+    expect(() =>
+      parseNoteDocument({
+        type: "doc",
+        content: [{
+          type: "table",
+          content: [{
+            type: "tableCell",
+            content: [{ type: "paragraph" }],
+          }],
+        }],
+      }),
+    ).toThrow("Invalid note document.");
+  });
+
+  test("accepts valid table structure", () => {
+    expect(() =>
+      parseNoteDocument({
+        type: "doc",
+        content: [{
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [{
+                type: "tableHeader",
+                content: [{ type: "paragraph", content: [{ type: "text", text: "Head" }] }],
+              }],
+            },
+            {
+              type: "tableRow",
+              content: [{
+                type: "tableCell",
+                content: [{ type: "paragraph", content: [{ type: "text", text: "Cell" }] }],
+              }],
+            },
+          ],
+        }],
+      }),
+    ).not.toThrow();
+  });
+});

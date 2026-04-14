@@ -1354,7 +1354,7 @@ describe("WorkspaceShell note flow", () => {
     await waitFor(() => {
       expect(screen.getByTestId("pdf-title")).toHaveTextContent("lecture.pdf");
     });
-    expect(screen.getAllByText("lecture.pdf").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("lecture.pdf")).toBeInTheDocument();
     expect(fakeSupabase.__signedUrlCalls.length).toBeGreaterThan(signedUrlCallCount);
   });
 
@@ -1804,7 +1804,7 @@ describe("WorkspaceShell note flow", () => {
     renderWorkspace();
 
     expect(await screen.findByRole("button", { name: "Session note" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Open session menu" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: "Open menu" }).length).toBeGreaterThanOrEqual(1);
 
     const sessionButton = screen.getByRole("button", { name: "Session note" });
     const sessionRow = sessionButton.closest(".group");
@@ -1819,7 +1819,7 @@ describe("WorkspaceShell note flow", () => {
       expect(fakeSupabase.__noteSessionRows).toHaveLength(0);
     });
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "Open menu" })).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: "Open menu" })).toHaveLength(2);
     });
     expect(fakeSupabase.__treeRows.find((row) => row.id === "session-note-node")).toBeDefined();
   });
@@ -1889,7 +1889,7 @@ describe("WorkspaceShell note flow", () => {
       expect(fakeSupabase.__noteSessionRows).toHaveLength(0);
     });
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "Open menu" }).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByRole("button", { name: "Open menu" }).length).toBeGreaterThanOrEqual(2);
     });
     expect(screen.queryByRole("button", { name: "Session note" })).not.toBeInTheDocument();
     expect(fakeSupabase.__treeRows.find((row) => row.id === "session-note-node")).toBeDefined();

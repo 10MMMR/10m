@@ -133,27 +133,9 @@ function formatUpdatedAt(updatedAt: string) {
     return "Unknown";
   }
 
-  const now = new Date();
-  const startOfToday = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-  );
-  const startOfYesterday = new Date(startOfToday);
-  startOfYesterday.setDate(startOfToday.getDate() - 1);
-  const startOfTomorrow = new Date(startOfToday);
-  startOfTomorrow.setDate(startOfToday.getDate() + 1);
-
-  if (date >= startOfToday && date < startOfTomorrow) {
-    return "today";
-  }
-
-  if (date >= startOfYesterday && date < startOfToday) {
-    return "yesterday";
-  }
-
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
+    timeStyle: "short",
   }).format(date);
 }
 
@@ -178,7 +160,7 @@ function getDefaultAddAction(kind: TreeNodeKind): TreeAddAction | null {
 }
 
 function getDepthPadding(depth: number) {
-  return `${depth * 16}px`;
+  return `${depth * 18}px`;
 }
 
 type RowActionsProps = {
@@ -221,14 +203,14 @@ function RowActions({
       {addOptions.length > 0 ? (
         <div className='relative' data-tree-popover>
           <button
-            className={`inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md transition-colors duration-150 ${buttonToneClass}`}
+            className={`inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors duration-150 ${buttonToneClass}`}
             onClick={(event) => {
               stopClick(event);
               onToggleAddMenu(node.id);
             }}
             type='button'
           >
-            <PlusIcon className='h-3 w-3' aria-hidden='true' />
+            <PlusIcon className='h-3.5 w-3.5' aria-hidden='true' />
             <span className='sr-only'>Add item</span>
           </button>
           {isAddMenuOpen ? (
@@ -276,7 +258,7 @@ function RowActions({
 
       <div className='relative' data-tree-popover>
         <button
-          className={`inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md transition-colors duration-150 ${buttonToneClass}`}
+          className={`inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors duration-150 ${buttonToneClass}`}
           onClick={(event) => {
             stopClick(event);
             onPrepareRowMenu(node.id);
@@ -284,7 +266,7 @@ function RowActions({
           }}
           type='button'
         >
-          <EllipsisVerticalIcon className='h-3.5 w-3.5' aria-hidden='true' />
+          <EllipsisVerticalIcon className='h-4 w-4' aria-hidden='true' />
           <span className='sr-only'>Open menu</span>
         </button>
         {isRowMenuOpen ? (
@@ -587,18 +569,17 @@ export function LeftPane({
     };
   }, [treeNodes]);
 
-  const topLevelNodes = useMemo(
-    () => (rootNode ? (childrenByParent.get(rootNode.id) ?? []) : []),
-    [childrenByParent, rootNode],
-  );
-
   const visibleNodeIds = useMemo(() => {
+    if (!rootNode) {
+      return [];
+    }
+
     const ids: string[] = [];
 
     const walk = (node: TreeNode) => {
       ids.push(node.id);
 
-      if (!expandedIds.has(node.id)) {
+      if (node.kind !== "root" && !expandedIds.has(node.id)) {
         return;
       }
 
@@ -606,9 +587,9 @@ export function LeftPane({
       children.forEach(walk);
     };
 
-    topLevelNodes.forEach(walk);
+    walk(rootNode);
     return ids;
-  }, [childrenByParent, expandedIds, topLevelNodes]);
+  }, [childrenByParent, expandedIds, rootNode]);
 
   const asideClass = `flex min-h-0 flex-col overflow-x-visible overflow-y-hidden border-b border-(--border-soft) bg-(--surface-panel) backdrop-blur-xl lg:rounded-2xl lg:border lg:border-(--border-soft) lg:bg-(--surface-base) ${
     locked
@@ -654,7 +635,7 @@ export function LeftPane({
         ? selectionTone
         : "hover:bg-(--surface-main-faint)";
 
-    return `flex min-w-0 flex-1 items-start gap-1.5 px-1.5 py-1 text-left transition-colors duration-150 ${rowTone}`;
+    return `flex min-w-0 flex-1 items-start gap-2 px-2 py-1.5 text-left transition-colors duration-150 ${rowTone}`;
   };
 
   const hasGeneratableSources = (nodeId: string): boolean => {
@@ -816,10 +797,10 @@ export function LeftPane({
 
           <div
             className={getRowClasses(node, isSelected, isActive, dropInsideActive)}
-            style={{ paddingLeft: `calc(${indent} + 12px)` }}
+            style={{ paddingLeft: `calc(${indent} + 16px)` }}
           >
             <button
-              className={`inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center ${toggleButtonTone} ${
+              className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center ${toggleButtonTone} ${
                 canToggle ? "" : "opacity-0"
               }`}
               onClick={() => {
@@ -831,15 +812,15 @@ export function LeftPane({
             >
               {canToggle ? (
                 isExpanded ? (
-                  <ChevronDownIcon className='h-3.5 w-3.5' aria-hidden='true' />
+                  <ChevronDownIcon className='h-4 w-4' aria-hidden='true' />
                 ) : (
-                  <ChevronRightIcon className='h-3.5 w-3.5' aria-hidden='true' />
+                  <ChevronRightIcon className='h-4 w-4' aria-hidden='true' />
                 )
               ) : null}
             </button>
 
             <button
-              className='flex min-w-0 flex-1 items-start gap-1.5 text-left'
+              className='flex min-w-0 flex-1 items-start gap-2 text-left'
               onClick={(event) =>
                 onSelectNode(node.id, {
                   mode: event.shiftKey
@@ -853,20 +834,19 @@ export function LeftPane({
               type='button'
             >
               {Icon ? (
-                <span className='flex h-3.5 shrink-0 items-center'>
-                  <Icon className={`h-3.5 w-3.5 ${iconTone}`} aria-hidden='true' />
-                </span>
+                <Icon className={`mt-1 h-4 w-4 shrink-0 ${iconTone}`} aria-hidden='true' />
               ) : (
-                <span className='flex h-3.5 w-1.5 shrink-0 items-center' aria-hidden='true'>
-                  <span className='h-1.5 w-1.5 rounded-full bg-(--note-indicator)' />
-                </span>
+                <span
+                  className='mt-1.5 h-2 w-2 shrink-0 rounded-full bg-(--note-indicator)'
+                  aria-hidden='true'
+                />
               )}
               <span className='min-w-0'>
-                <span className={`block truncate text-[13px] leading-tight ${titleTone}`}>
+                <span className={`block truncate text-[14px] ${titleTone}`}>
                   {node.kind === "root" ? classLabel : node.title}
                 </span>
                 {node.kind !== "root" ? (
-                  <span className={`block text-[11px] leading-tight ${metaTone}`}>
+                  <span className={`block text-xs ${metaTone}`}>
                     {formatUpdatedAt(node.updatedAt)}
                   </span>
                 ) : null}
@@ -906,30 +886,25 @@ export function LeftPane({
     onClearSelectionToActive();
   };
 
-  const rootDropActive =
-    rootNode !== null &&
-    dropIndicator?.targetId === rootNode.id &&
-    dropIndicator.position === "inside";
-
   if (collapsed) {
     return (
       <aside ref={asideRef} className={asideClass}>
-        <div className='flex min-h-0 flex-1 flex-col items-center gap-2.5 p-2.5'>
+        <div className='flex min-h-0 flex-1 flex-col items-center gap-3 p-3'>
           <button
             aria-label='Open notes pane'
-            className='grid h-8 w-8 place-items-center rounded-xl border border-transparent bg-(--surface-main-soft) text-[12px] font-bold text-(--main) transition-colors duration-150 hover:bg-(--surface-main-faint)'
+            className='grid h-9 w-9 place-items-center rounded-xl border border-transparent bg-(--surface-main-soft) text-[13px] font-bold text-(--main) transition-colors duration-150 hover:bg-(--surface-main-faint)'
             onClick={onExpand}
             type='button'
           >
-            <ChevronDoubleRightIcon className='h-4 w-4' aria-hidden='true' />
+            <ChevronDoubleRightIcon className='h-5 w-5' aria-hidden='true' />
           </button>
           <button
             aria-label='Create folder'
-            className='grid h-8 w-8 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
+            className='grid h-9 w-9 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
             onClick={onCreateFolder}
             type='button'
           >
-            <FolderIcon className='h-4 w-4' aria-hidden='true' />
+            <FolderIcon className='h-5 w-5' aria-hidden='true' />
           </button>
         </div>
       </aside>
@@ -954,138 +929,33 @@ export function LeftPane({
               : undefined
           }
         >
-          <div className='flex items-center gap-2 border-b border-(--border-soft) px-2.5 py-2'>
+          <div className='flex items-center gap-3 border-b border-(--border-soft) p-3'>
             <Link
               aria-label='Go to app dashboard'
-              className='grid h-8 w-8 place-items-center rounded-full bg-(--surface-panel-strong) text-[9px] font-extrabold text-(--text-main) transition-opacity duration-150 hover:opacity-90'
+              className='grid h-9 w-9 place-items-center rounded-full bg-(--main) text-[10px] font-extrabold text-(--text-contrast) transition-opacity duration-150 hover:opacity-90'
               href='/app'
             >
               10M
             </Link>
-            <div className='min-w-0 flex-1'>
-              <h2 className='m-0 truncate text-lg leading-tight'>{classLabel}</h2>
+            <div className='flex-1'>
+              <h2 className='m-0'>Notes</h2>
             </div>
-            {rootNode ? (
-              <div className='relative' data-tree-popover>
-                <button
-                  aria-label='Add item'
-                  className='grid h-8 w-8 place-items-center rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
-                  onClick={() => {
-                    toggleAddMenu(rootNode.id);
-                  }}
-                  type='button'
-                >
-                  <PlusIcon className='h-4 w-4' aria-hidden='true' />
-                </button>
-                {openAddMenuForId === rootNode.id ? (
-                  <div className='absolute top-[calc(100%+4px)] right-0 z-10 w-36 rounded-xl border border-(--border-soft) bg-(--surface-base) p-1 shadow-(--shadow-floating)'>
-                    <button
-                      className='w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)'
-                      onClick={() => {
-                        onAddAction(rootNode.id, "folder");
-                        closeAllMenus();
-                      }}
-                      type='button'
-                    >
-                      New folder
-                    </button>
-                    <button
-                      className='w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)'
-                      onClick={() => {
-                        onAddAction(rootNode.id, "note");
-                        closeAllMenus();
-                      }}
-                      type='button'
-                    >
-                      New note
-                    </button>
-                    <button
-                      className='w-full rounded-lg px-2 py-1.5 text-left text-xs text-(--text-main) transition-colors duration-150 hover:bg-(--surface-main-faint)'
-                      onClick={() => {
-                        onAddAction(rootNode.id, "upload");
-                        closeAllMenus();
-                      }}
-                      type='button'
-                    >
-                      Upload file
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
             <button
               aria-label='Collapse notes pane'
-              className='grid h-8 w-8 place-items-center rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
+              className='grid h-9 w-9 place-items-center rounded-lg border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
               onClick={onCollapse}
               type='button'
             >
-              <ChevronDoubleLeftIcon className='h-4 w-4' aria-hidden='true' />
+              <ChevronDoubleLeftIcon className='h-5 w-5' aria-hidden='true' />
             </button>
           </div>
 
-          <div className='min-h-0 flex-1 overflow-auto py-2'>
-            <div
-              className={`min-h-full ${rootDropActive ? "bg-(--surface-main-faint)" : ""}`}
-              onClick={handleTreeBackgroundClick}
-              onDragOver={(event) => {
-                if (event.target !== event.currentTarget) {
-                  return;
-                }
-
-                if (!dragSource || !rootNode) {
-                  return;
-                }
-
-                const dragNodeId =
-                  dragSource.type === "tree"
-                    ? dragSource.nodeId
-                    : dragSource.noteNodeId;
-
-                if (
-                  !canDropNode(
-                    allTreeNodesForDrop,
-                    dragNodeId,
-                    rootNode.id,
-                    "inside",
-                  )
-                ) {
-                  return;
-                }
-
-                event.preventDefault();
-                setDropIndicator({
-                  targetId: rootNode.id,
-                  position: "inside",
-                });
-              }}
-              onDrop={(event) => {
-                if (event.target !== event.currentTarget) {
-                  return;
-                }
-
-                event.preventDefault();
-
-                if (
-                  !dragSource ||
-                  !rootNode ||
-                  !dropIndicator ||
-                  dropIndicator.targetId !== rootNode.id ||
-                  dropIndicator.position !== "inside"
-                ) {
-                  return;
-                }
-
-                if (dragSource.type === "tree") {
-                  onMoveNode(dragSource.nodeId, rootNode.id, "inside");
-                } else {
-                  onMoveSessionToTree(dragSource.sessionId, rootNode.id, "inside");
-                }
-
-                setDragSource(null);
-                setDropIndicator(null);
-              }}
-            >
-              {topLevelNodes.map((node) => renderNode(node, 0))}
+          <div
+            className='min-h-0 flex-1 overflow-auto py-3'
+            onClick={handleTreeBackgroundClick}
+          >
+            <div className='min-h-full' onClick={handleTreeBackgroundClick}>
+              {rootNode ? renderNode(rootNode, 0) : null}
             </div>
           </div>
         </section>
@@ -1122,18 +992,18 @@ export function LeftPane({
               : undefined
           }
         >
-          <div className='mono-label px-3 pt-2.5 pb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-(--text-muted)'>
+          <div className='mono-label px-4 pt-3 pb-2 text-[11px] font-medium uppercase tracking-[0.15em] text-(--text-muted)'>
             Sessions
           </div>
           <div
-            className={`${isLgViewport ? "min-h-0 flex-1 overflow-auto" : "overflow-visible"} px-1.5 pb-2.5`}
+            className={`${isLgViewport ? "min-h-0 flex-1 overflow-auto" : "overflow-visible"} px-2 pb-3`}
           >
             {sessions.map((session) => (
               <div key={session.id} className='group relative'>
                 <div className='flex items-center gap-1'>
                   <button
                     draggable={session.kind === "editor-note"}
-                    className='w-full truncate rounded-lg px-2 py-1 text-left text-[12px] text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
+                    className='w-full truncate rounded-lg px-2.5 py-1.5 text-left text-[13px] text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
                     onDragEnd={() => {
                       setDragSource(null);
                       setDropIndicator(null);
@@ -1159,7 +1029,7 @@ export function LeftPane({
                   </button>
                   <div className='relative' data-tree-popover>
                     <button
-                      className='inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
+                      className='inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-(--text-muted) transition-colors duration-150 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
@@ -1167,7 +1037,7 @@ export function LeftPane({
                       }}
                       type='button'
                     >
-                      <EllipsisVerticalIcon className='h-3.5 w-3.5' aria-hidden='true' />
+                      <EllipsisVerticalIcon className='h-4 w-4' aria-hidden='true' />
                       <span className='sr-only'>Open session menu</span>
                     </button>
                     {openSessionMenuForId === session.id ? (

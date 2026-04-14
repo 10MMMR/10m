@@ -16,7 +16,7 @@ export function SiteLogo({ compact = false, className }: SiteLogoProps) {
         className,
       )}
     >
-      <span className="grid h-10 w-10 place-items-center rounded-full bg-(--surface-panel-strong) text-sm font-extrabold text-(--text-main)">
+      <span className="grid h-10 w-10 place-items-center rounded-full bg-(--main) text-sm font-extrabold text-(--text-contrast)">
         10M
       </span>
       {compact ? null : (

@@ -23,12 +23,6 @@ const AI_MARK_TYPES = new Set(["bold", "highlight", "italic", "underline"]);
 const HEADING_LEVELS = new Set([1, 2, 3]);
 const TEXT_ALIGNS = new Set(["left", "center", "right", "justify"]);
 const LINE_HEIGHTS = new Set(["1.0", "1.5", "2.0"]);
-const TABLE_CELL_BLOCK_TYPES = new Set([
-  "paragraph",
-  "heading",
-  "bulletList",
-  "orderedList",
-]);
 
 const EMPTY_PARAGRAPH: NoteDocument = {
   type: "paragraph",
@@ -533,23 +527,12 @@ function isValidNode(value: unknown, options: ValidationOptions): value is NoteD
         value.content.length > 0 &&
         value.content.every((item) => isValidNode(item, options));
     case "listItem":
-      return isAbsent(attrs) &&
-        Array.isArray(value.content) &&
-        value.content.length > 0 &&
-        value.content.every((item) => isValidNode(item, options));
     case "table":
-      return isAbsent(attrs) &&
-        Array.isArray(value.content) &&
-        value.content.length > 0 &&
-        value.content.every((item) => isValidNode(item, options) && item.type === "tableRow");
     case "tableRow":
       return isAbsent(attrs) &&
         Array.isArray(value.content) &&
         value.content.length > 0 &&
-        value.content.every((item) =>
-          isValidNode(item, options) &&
-          (item.type === "tableCell" || item.type === "tableHeader")
-        );
+        value.content.every((item) => isValidNode(item, options));
     case "tableHeader":
     case "tableCell":
       if (attrs !== undefined && attrs !== null && !isRecord(attrs)) {
@@ -580,9 +563,7 @@ function isValidNode(value: unknown, options: ValidationOptions): value is NoteD
 
       return Array.isArray(value.content) &&
         value.content.length > 0 &&
-        value.content.every((item) =>
-          isValidNode(item, options) && TABLE_CELL_BLOCK_TYPES.has(item.type)
-        );
+        value.content.every((item) => isValidNode(item, options));
     case "equationBlock":
       if (!options.allowEquationBlock || !isRecord(attrs)) {
         return false;

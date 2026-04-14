@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 export type OptionValue = string | number;
 
@@ -18,62 +18,45 @@ export type OptionsPopupSelection = Record<string, OptionValue | null>;
 
 type OptionsPopupProps = {
   columns: OptionsPopupColumn[];
-  align?: "left" | "right";
   onSelectionChange: (selection: OptionsPopupSelection) => void;
-  selectedValues?: OptionsPopupSelection;
 };
 
-const toInitialSelection = (
-  columns: OptionsPopupColumn[],
-  selectedValues?: OptionsPopupSelection,
-) =>
+const toInitialSelection = (columns: OptionsPopupColumn[]) =>
   columns.reduce<OptionsPopupSelection>((nextSelection, column) => {
-    nextSelection[column.key] = selectedValues?.[column.key] ?? null;
+    nextSelection[column.key] = null;
     return nextSelection;
   }, {});
 
 const formatColumnLabel = (key: string) =>
   key.charAt(0).toUpperCase() + key.slice(1).replaceAll("-", " ");
 
-export function OptionsPopup({
-  columns,
-  align = "left",
-  onSelectionChange,
-  selectedValues,
-}: OptionsPopupProps) {
+export function OptionsPopup({ columns, onSelectionChange }: OptionsPopupProps) {
   const [selection, setSelection] = useState<OptionsPopupSelection>(() =>
-    toInitialSelection(columns, selectedValues),
+    toInitialSelection(columns),
   );
-
-  useEffect(() => {
-    setSelection(toInitialSelection(columns, selectedValues));
-  }, [columns, selectedValues]);
 
   if (columns.length < 1) {
     return null;
   }
 
   const handleSelect = (key: string, value: OptionValue) => {
-    if (selection[key] === value) {
-      return;
-    }
+    setSelection((previousSelection) => {
+      if (previousSelection[key] === value) {
+        return previousSelection;
+      }
 
-    const nextSelection = {
-      ...selection,
-      [key]: value,
-    };
+      const nextSelection = {
+        ...previousSelection,
+        [key]: value,
+      };
 
-    setSelection(nextSelection);
-    onSelectionChange(nextSelection);
+      onSelectionChange(nextSelection);
+      return nextSelection;
+    });
   };
 
   return (
-    <div
-      className={`absolute top-full z-20 mt-2 min-w-full rounded-2xl border border-(--border-soft) bg-(--surface-panel-strong) p-3 shadow-(--shadow-soft) backdrop-blur-md ${
-        align === "right" ? "right-0" : "left-0"
-      }`}
-      data-schedule-selector="true"
-    >
+    <div className="absolute top-full left-0 z-20 mt-2 min-w-full rounded-2xl border border-(--border-soft) bg-(--surface-panel-strong) p-3 shadow-(--shadow-soft) backdrop-blur-md">
       <div
         className="grid gap-3"
         style={{

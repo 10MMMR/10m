@@ -1,234 +1,193 @@
 "use client";
 
-import { ArrowUpTrayIcon, TrashIcon } from "@heroicons/react/24/outline";
-import { ChevronUpDownIcon } from "@heroicons/react/20/solid";
-import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
-  OptionsPopup,
-  type OptionsPopupColumn,
-  type OptionsPopupSelection,
-} from "@/app/app/_components/options-popup";
+  ArrowUpTrayIcon,
+  DocumentTextIcon,
+  RectangleStackIcon,
+} from "@heroicons/react/24/outline";
+import Link from "next/link";
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/app/_global/authentication/auth-context";
+import { supabase } from "@/app/_global/authentication/supabaseClient";
 
 type AddClassStep = "options" | "manual-entry";
-type ScheduleField = "day" | "start-time" | "end-time";
-type ActiveSchedulePopup = {
-  entryId: string;
-  field: ScheduleField;
+type SemesterSeason = "Spring" | "Summer" | "Fall";
+type SemesterTerm = {
+  season: SemesterSeason;
+  year: number;
 };
-type ScheduleEntry = {
+type SemesterOption = {
+  label: string;
+  value: string;
+};
+type ClassListItem = {
   id: string;
-  daySelection: OptionsPopupSelection;
-  startTimeSelection: OptionsPopupSelection;
-  endTimeSelection: OptionsPopupSelection;
+  name: string | null;
+  semester: string | null;
 };
 
-const classDayColumns: OptionsPopupColumn[] = [
-  {
-    key: "day",
-    options: [
-      { name: "Monday", value: "Monday" },
-      { name: "Tuesday", value: "Tuesday" },
-      { name: "Wednesday", value: "Wednesday" },
-      { name: "Thursday", value: "Thursday" },
-      { name: "Friday", value: "Friday" },
-      { name: "Saturday", value: "Saturday" },
-      { name: "Sunday", value: "Sunday" },
-    ],
-  },
-];
+const toSemesterLabel = (term: SemesterTerm) => `${term.season} ${term.year}`;
 
-const classTimeColumns: OptionsPopupColumn[] = [
-  {
-    key: "hour",
-    options: Array.from({ length: 12 }, (_, index) => {
-      const value = index + 1;
-      return {
-        name: String(value),
-        value,
-      };
-    }),
-  },
-  {
-    key: "minute",
-    options: Array.from({ length: 12 }, (_, index) => {
-      const minute = index * 5;
-      return {
-        name: String(minute).padStart(2, "0"),
-        value: minute,
-      };
-    }),
-  },
-  {
-    key: "period",
-    options: [
-      { name: "AM", value: "am" },
-      { name: "PM", value: "pm" },
-    ],
-  },
-];
+const getCurrentSemester = (date: Date): SemesterTerm => {
+  const month = date.getMonth() + 1;
+  const year = date.getFullYear();
 
-const defaultDaySelection: OptionsPopupSelection = {
-  day: null,
+  if (month >= 1 && month <= 5) {
+    return { season: "Spring", year };
+  }
+
+  if (month >= 6 && month <= 7) {
+    return { season: "Summer", year };
+  }
+
+  return { season: "Fall", year };
 };
 
-const defaultTimeSelection: OptionsPopupSelection = {
-  hour: null,
-  minute: null,
-  period: null,
+const getSemesterOptions = (date: Date): SemesterOption[] => {
+  const current = getCurrentSemester(date);
+  let second: SemesterTerm;
+  let third: SemesterTerm;
+
+  if (current.season === "Spring") {
+    second = { season: "Fall", year: current.year };
+    third = { season: "Summer", year: current.year };
+  } else if (current.season === "Fall") {
+    second = { season: "Spring", year: current.year + 1 };
+    third = { season: "Summer", year: current.year + 1 };
+  } else {
+    second = { season: "Fall", year: current.year };
+    third = { season: "Summer", year: current.year + 1 };
+  }
+
+  const terms = [current, second, third];
+
+  return terms.map((term) => {
+    const label = toSemesterLabel(term);
+    return {
+      label,
+      value: label,
+    };
+  });
 };
-
-const createScheduleEntry = (id: string): ScheduleEntry => ({
-  id,
-  daySelection: { ...defaultDaySelection },
-  startTimeSelection: { ...defaultTimeSelection },
-  endTimeSelection: { ...defaultTimeSelection },
-});
-
-const formatSelectedTime = (selection: OptionsPopupSelection) => {
-  const hour = selection.hour;
-  const minute = selection.minute;
-  const period = selection.period;
-
-  const hourText = typeof hour === "number" ? String(hour).padStart(2, "0") : "--";
-  const minuteText = typeof minute === "number" ? String(minute).padStart(2, "0") : "--";
-  const periodText = typeof period === "string" ? period.toUpperCase() : "--";
-
-  return `${hourText}: ${minuteText} ${periodText}`;
-};
-
-const hasSelectedDay = (selection: OptionsPopupSelection) => typeof selection.day === "string";
-const hasSelectedTime = (selection: OptionsPopupSelection) =>
-  typeof selection.hour === "number" &&
-  typeof selection.minute === "number" &&
-  typeof selection.period === "string";
 
 export default function ClassesPage() {
+  const { user } = useAuth();
   const [isAddClassModalOpen, setIsAddClassModalOpen] = useState(false);
   const [addClassStep, setAddClassStep] = useState<AddClassStep>("options");
-  const [activeSchedulePopup, setActiveSchedulePopup] = useState<ActiveSchedulePopup | null>(null);
+  const [classes, setClasses] = useState<ClassListItem[]>([]);
+  const [isLoadingClasses, setIsLoadingClasses] = useState(true);
+  const [classesError, setClassesError] = useState<string | null>(null);
   const [className, setClassName] = useState("");
-  const [scheduleEntries, setScheduleEntries] = useState<ScheduleEntry[]>([
-    createScheduleEntry("schedule-1"),
-  ]);
-  const nextScheduleId = useRef(2);
+  const [professorEmail, setProfessorEmail] = useState("");
+  const [isSubmittingClass, setIsSubmittingClass] = useState(false);
+  const [submitClassError, setSubmitClassError] = useState<string | null>(null);
+  const semesterOptions = useMemo(() => getSemesterOptions(new Date()), []);
+  const [selectedSemester, setSelectedSemester] = useState<string>(
+    semesterOptions[0]?.value ?? "",
+  );
 
-  useEffect(() => {
-    if (!activeSchedulePopup) {
+  const loadClasses = useCallback(async () => {
+    if (!supabase) {
+      setClasses([]);
+      setClassesError("Supabase is unavailable right now.");
+      setIsLoadingClasses(false);
       return;
     }
 
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
+    if (!user) {
+      setClasses([]);
+      setClassesError(null);
+      setIsLoadingClasses(false);
+      return;
+    }
 
-      if (!(target instanceof Element)) {
-        return;
-      }
+    setIsLoadingClasses(true);
+    setClassesError(null);
 
-      const clickedInsideScheduleSelector = target.closest("[data-schedule-selector='true']");
+    const { data, error } = await supabase
+      .from("classes")
+      .select("id, name, semester")
+      .eq("user_id", user.id)
+      .order("name", { ascending: true });
 
-      if (!clickedInsideScheduleSelector) {
-        setActiveSchedulePopup(null);
-      }
-    };
+    if (error) {
+      setClasses([]);
+      setClassesError(error.message || "Could not load classes.");
+      setIsLoadingClasses(false);
+      return;
+    }
 
-    document.addEventListener("pointerdown", handlePointerDown);
+    setClasses(data ?? []);
+    setIsLoadingClasses(false);
+  }, [user]);
 
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-    };
-  }, [activeSchedulePopup]);
+  useEffect(() => {
+    void loadClasses();
+  }, [loadClasses]);
 
   const openAddClassModal = () => {
+    setSubmitClassError(null);
     setAddClassStep("options");
-    setActiveSchedulePopup(null);
     setIsAddClassModalOpen(true);
   };
 
   const closeAddClassModal = () => {
-    setActiveSchedulePopup(null);
+    setSubmitClassError(null);
     setIsAddClassModalOpen(false);
   };
 
   const handleManualEntryClick = () => {
     setAddClassStep("manual-entry");
-    setActiveSchedulePopup(null);
   };
 
-  const handleScheduleFieldClick = (entryId: string, field: ScheduleField) => {
-    setActiveSchedulePopup((currentPopup) => {
-      if (currentPopup?.entryId === entryId && currentPopup.field === field) {
-        return null;
-      }
+  const handleManualSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
 
-      return {
-        entryId,
-        field,
-      };
-    });
-  };
-
-  const handleDaySelectionChange = (entryId: string, selection: OptionsPopupSelection) => {
-    setScheduleEntries((previousEntries) =>
-      previousEntries.map((entry) =>
-        entry.id === entryId
-          ? {
-              ...entry,
-              daySelection: selection,
-            }
-          : entry,
-      ),
-    );
-  };
-
-  const handleStartTimeSelectionChange = (entryId: string, selection: OptionsPopupSelection) => {
-    setScheduleEntries((previousEntries) =>
-      previousEntries.map((entry) =>
-        entry.id === entryId
-          ? {
-              ...entry,
-              startTimeSelection: selection,
-            }
-          : entry,
-      ),
-    );
-  };
-
-  const handleEndTimeSelectionChange = (entryId: string, selection: OptionsPopupSelection) => {
-    setScheduleEntries((previousEntries) =>
-      previousEntries.map((entry) =>
-        entry.id === entryId
-          ? {
-              ...entry,
-              endTimeSelection: selection,
-            }
-          : entry,
-      ),
-    );
-  };
-
-  const handleAddScheduleEntry = () => {
-    const newId = `schedule-${nextScheduleId.current}`;
-    nextScheduleId.current += 1;
-
-    setScheduleEntries((previousEntries) => [...previousEntries, createScheduleEntry(newId)]);
-  };
-
-  const handleDeleteScheduleEntry = (entryId: string) => {
-    if (activeSchedulePopup?.entryId === entryId) {
-      setActiveSchedulePopup(null);
+    if (isSubmittingClass) {
+      return;
     }
 
-    setScheduleEntries((previousEntries) => {
-      if (previousEntries.length === 1) {
-        return previousEntries;
+    const trimmedClassName = className.trim();
+
+    if (!trimmedClassName) {
+      setSubmitClassError("Please add a class name.");
+      return;
+    }
+
+    if (!user) {
+      setSubmitClassError("Please sign in again before adding a class.");
+      return;
+    }
+
+    if (!supabase) {
+      setSubmitClassError("Supabase is unavailable right now. Please try again.");
+      return;
+    }
+
+    setSubmitClassError(null);
+    setIsSubmittingClass(true);
+    try {
+      const { error } = await supabase.from("classes").insert({
+        name: trimmedClassName,
+        professor_email: professorEmail.trim(),
+        semester: selectedSemester,
+      });
+
+      if (error) {
+        setSubmitClassError(error.message || "Could not add class. Please try again.");
+        return;
       }
 
-      return previousEntries.filter((entry) => entry.id !== entryId);
-    });
-  };
-
-  const handleManualSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+      setClassName("");
+      setProfessorEmail("");
+      setSelectedSemester(semesterOptions[0]?.value ?? "");
+      closeAddClassModal();
+      void loadClasses();
+    } catch {
+      setSubmitClassError("Could not add class. Please try again.");
+    } finally {
+      setIsSubmittingClass(false);
+    }
   };
 
   return (
@@ -250,6 +209,66 @@ export default function ClassesPage() {
             Add class
           </button>
         </header>
+
+        {isLoadingClasses ? (
+          <article className="organic-card rounded-[1.8rem] p-6 sm:p-8">
+            <div className="flex items-center gap-3">
+              <div
+                aria-hidden="true"
+                className="h-6 w-6 animate-spin rounded-full border-2 border-(--border-soft) border-t-(--main)"
+              />
+              <p className="text-sm font-semibold text-(--text-muted)">Loading your classes...</p>
+            </div>
+          </article>
+        ) : classes.length === 0 ? (
+          <article className="organic-card rounded-[1.8rem] p-6 sm:p-8">
+            <h2 className="display-font text-2xl font-bold text-(--text-main)">No classes yet</h2>
+            <p className="mt-3 max-w-2xl text-(--text-muted)">
+              Add your first class to start organizing your semester.
+            </p>
+            {classesError ? (
+              <p className="mt-3 text-sm font-semibold text-(--destructive)">{classesError}</p>
+            ) : null}
+            <button
+              className="organic-button organic-button-primary mt-5 min-h-11 cursor-pointer"
+              onClick={openAddClassModal}
+              type="button"
+            >
+              Add class
+            </button>
+          </article>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {classes.map((classItem) => (
+              <Link
+                className="organic-card block cursor-pointer rounded-[1.5rem] p-5 transition-all duration-200 hover:-translate-y-px hover:border-(--border-strong) hover:shadow-(--shadow-soft)"
+                href={`/editor/class/${encodeURIComponent(classItem.id)}`}
+                key={classItem.id}
+              >
+                <h2 className="text-lg font-semibold text-(--text-main)">
+                  {classItem.name?.trim() || "Untitled class"}
+                </h2>
+                <p className="mt-3 text-sm font-semibold text-(--text-secondary)">
+                  {classItem.semester?.trim() || "No semester selected"}
+                </p>
+                <div className="mt-4 flex items-center gap-6 text-sm font-semibold text-(--text-muted)">
+                  <div className="inline-flex items-center gap-2">
+                    <RectangleStackIcon aria-hidden="true" className="h-4 w-4" />
+                    <span>0 units</span>
+                  </div>
+                  <div className="inline-flex items-center gap-2">
+                    <DocumentTextIcon aria-hidden="true" className="h-4 w-4" />
+                    <span>0 materials</span>
+                  </div>
+                </div>
+                <div className="mt-4 border-t border-(--border-soft) pt-3 text-sm text-(--text-muted)">
+                  <span>Last Activity: </span>
+                  <span className="font-semibold text-(--text-main)">Today</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </section>
 
       {isAddClassModalOpen ? (
@@ -310,7 +329,6 @@ export default function ClassesPage() {
                   className="inline-flex cursor-pointer items-center text-sm font-semibold text-(--main) transition-colors duration-200 hover:text-(--text-secondary)"
                   onClick={() => {
                     setAddClassStep("options");
-                    setActiveSchedulePopup(null);
                   }}
                   type="button"
                 >
@@ -325,160 +343,80 @@ export default function ClassesPage() {
                     className="organic-input"
                     id="class-name"
                     name="className"
-                    onChange={(event) => setClassName(event.target.value)}
+                    onChange={(event) => {
+                      setClassName(event.target.value);
+                      if (submitClassError) {
+                        setSubmitClassError(null);
+                      }
+                    }}
                     placeholder="Example: Biology 101"
                     type="text"
                     value={className}
                   />
                 </div>
 
-                <section className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="display-font text-xl font-bold text-(--text-main)">Class schedule</h3>
-                    <button
-                      className="organic-button organic-button-outline min-h-10 px-4 py-2 text-sm"
-                      onClick={handleAddScheduleEntry}
-                      type="button"
-                    >
-                      Add day
-                    </button>
-                  </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-(--text-main)" htmlFor="professor-email">
+                    Professor contact email
+                  </label>
+                  <input
+                    className="organic-input"
+                    id="professor-email"
+                    name="professorEmail"
+                    onChange={(event) => {
+                      setProfessorEmail(event.target.value);
+                      if (submitClassError) {
+                        setSubmitClassError(null);
+                      }
+                    }}
+                    placeholder="professor@university.edu"
+                    type="email"
+                    value={professorEmail}
+                  />
+                </div>
 
-                  <div className="space-y-3">
-                    {scheduleEntries.map((entry, index) => (
-                      <div
-                        key={entry.id}
-                        className="rounded-2xl border border-(--border-soft) bg-(--surface-panel) p-3"
-                      >
-                        <div className="mb-3 flex items-center justify-between gap-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-(--text-muted)">
-                            Schedule {index + 1}
-                          </p>
-                          <button
-                            className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-(--border-soft) text-(--text-muted) transition-colors duration-200 hover:bg-(--surface-main-faint) hover:text-(--text-main) disabled:cursor-not-allowed disabled:opacity-45"
-                            disabled={scheduleEntries.length === 1}
-                            onClick={() => handleDeleteScheduleEntry(entry.id)}
-                            type="button"
-                          >
-                            <TrashIcon aria-hidden="true" className="h-4 w-4" />
-                          </button>
-                        </div>
+                <section className="space-y-2">
+                  <p className="text-sm font-semibold text-(--text-main)">Semester</p>
+                  <div className="space-y-2">
+                    {semesterOptions.map((option) => {
+                      const isSelected = selectedSemester === option.value;
 
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          <div className="relative" data-schedule-selector="true">
-                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-(--text-muted)">
-                              Day
-                            </p>
-                            <button
-                              className="organic-input inline-flex h-12 cursor-pointer items-center justify-between px-4 text-left text-sm font-semibold text-(--text-main)"
-                              onClick={() => handleScheduleFieldClick(entry.id, "day")}
-                              type="button"
-                            >
-                              <span
-                                className={
-                                  hasSelectedDay(entry.daySelection)
-                                    ? "text-(--text-main)"
-                                    : "text-(--text-muted)"
-                                }
-                              >
-                                {hasSelectedDay(entry.daySelection)
-                                  ? entry.daySelection.day
-                                  : "Select day"}
-                              </span>
-                              <ChevronUpDownIcon
-                                aria-hidden="true"
-                                className="h-4 w-4 shrink-0 text-(--text-muted)"
-                              />
-                            </button>
-
-                            {activeSchedulePopup?.entryId === entry.id &&
-                            activeSchedulePopup.field === "day" ? (
-                              <OptionsPopup
-                                columns={classDayColumns}
-                                onSelectionChange={(selection) =>
-                                  handleDaySelectionChange(entry.id, selection)
-                                }
-                              />
-                            ) : null}
-                          </div>
-
-                          <div className="relative" data-schedule-selector="true">
-                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-(--text-muted)">
-                              Start time
-                            </p>
-                            <button
-                              className="organic-input inline-flex h-12 cursor-pointer items-center justify-between px-4 text-left text-sm font-semibold text-(--text-main)"
-                              onClick={() => handleScheduleFieldClick(entry.id, "start-time")}
-                              type="button"
-                            >
-                              <span
-                                className={
-                                  hasSelectedTime(entry.startTimeSelection)
-                                    ? "mono-label text-(--text-main)"
-                                    : "mono-label text-(--text-muted)"
-                                }
-                              >
-                                {formatSelectedTime(entry.startTimeSelection)}
-                              </span>
-                              <ChevronUpDownIcon
-                                aria-hidden="true"
-                                className="h-4 w-4 shrink-0 text-(--text-muted)"
-                              />
-                            </button>
-
-                            {activeSchedulePopup?.entryId === entry.id &&
-                            activeSchedulePopup.field === "start-time" ? (
-                              <OptionsPopup
-                                columns={classTimeColumns}
-                                onSelectionChange={(selection) =>
-                                  handleStartTimeSelectionChange(entry.id, selection)
-                                }
-                              />
-                            ) : null}
-                          </div>
-
-                          <div className="relative" data-schedule-selector="true">
-                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-(--text-muted)">
-                              End time
-                            </p>
-                            <button
-                              className="organic-input inline-flex h-12 cursor-pointer items-center justify-between px-4 text-left text-sm font-semibold text-(--text-main)"
-                              onClick={() => handleScheduleFieldClick(entry.id, "end-time")}
-                              type="button"
-                            >
-                              <span
-                                className={
-                                  hasSelectedTime(entry.endTimeSelection)
-                                    ? "mono-label text-(--text-main)"
-                                    : "mono-label text-(--text-muted)"
-                                }
-                              >
-                                {formatSelectedTime(entry.endTimeSelection)}
-                              </span>
-                              <ChevronUpDownIcon
-                                aria-hidden="true"
-                                className="h-4 w-4 shrink-0 text-(--text-muted)"
-                              />
-                            </button>
-
-                            {activeSchedulePopup?.entryId === entry.id &&
-                            activeSchedulePopup.field === "end-time" ? (
-                              <OptionsPopup
-                                columns={classTimeColumns}
-                                onSelectionChange={(selection) =>
-                                  handleEndTimeSelectionChange(entry.id, selection)
-                                }
-                              />
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                      return (
+                        <button
+                          key={option.value}
+                          aria-pressed={isSelected}
+                          className={`flex w-full cursor-pointer items-center justify-between rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition-colors duration-200 ${
+                            isSelected
+                              ? "border-(--border-strong) bg-(--surface-main-soft) text-(--text-main)"
+                              : "border-(--border-soft) bg-(--surface-panel) text-(--text-muted) hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+                          }`}
+                          onClick={() => {
+                            setSelectedSemester(option.value);
+                            if (submitClassError) {
+                              setSubmitClassError(null);
+                            }
+                          }}
+                          type="button"
+                        >
+                          <span>{option.label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
 
-                <button className="organic-button organic-button-primary min-h-11" type="submit">
-                  Save class name
+                {/* Class schedule is temporarily disabled to reduce friction when adding classes. */}
+
+                {submitClassError ? (
+                  <p className="text-sm font-semibold text-(--destructive)">{submitClassError}</p>
+                ) : null}
+
+                <button
+                  className="organic-button organic-button-primary min-h-11 disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled={isSubmittingClass}
+                  type="submit"
+                >
+                  {isSubmittingClass ? "Adding class..." : "Add class"}
                 </button>
               </form>
             )}

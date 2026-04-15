@@ -2,11 +2,13 @@
 
 import {
   AcademicCapIcon,
+  Bars3Icon,
   CalendarDaysIcon,
   ChevronDoubleLeftIcon,
   ChevronDoubleRightIcon,
   ClipboardDocumentCheckIcon,
   Squares2X2Icon,
+  XMarkIcon,
 } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -58,19 +60,25 @@ const sidebarItems: SidebarItem[] = [
 
 export function AppShell({ children }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { signOut } = useAuth();
   const pathname = usePathname();
+  const mobileMenuId = "app-mobile-menu";
   const sidebarWidth = collapsed
     ? `${SIDEBAR_VISIBLE_REM}rem`
     : `${SIDEBAR_EXPANDED_REM}rem`;
   const sidebarShift = collapsed
     ? `translateX(-${SIDEBAR_HIDDEN_SHIFT_REM}rem)`
     : "translateX(0rem)";
+  const isItemActive = (item: SidebarItem) =>
+    item.match === "exact"
+      ? pathname === item.href
+      : pathname === item.href || pathname.startsWith(`${item.href}/`);
 
   return (
     <div className='workspace-shell flex h-[100dvh] flex-1 overflow-hidden'>
       <aside
-        className='relative overflow-hidden border-r border-(--border-soft) bg-(--surface-panel-strong) transition-[width] duration-300 ease-in-out h-[100dvh]'
+        className='relative hidden overflow-hidden border-r border-(--border-soft) bg-(--surface-panel-strong) transition-[width] duration-300 ease-in-out h-[100dvh] md:block'
         style={{ width: sidebarWidth }}
       >
         <button
@@ -100,10 +108,7 @@ export function AppShell({ children }: AppShellProps) {
 
           <nav className='mt-8 space-y-2 pb-32'>
             {sidebarItems.map((item) => {
-              const isActive =
-                item.match === "exact"
-                  ? pathname === item.href
-                  : pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const isActive = isItemActive(item);
               const Icon = item.icon;
 
               return (
@@ -135,9 +140,82 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </aside>
 
-      <main className='flex-1 overflow-y-auto'>
-        <div className='h-full p-5 sm:p-8 lg:p-10'>{children}</div>
-      </main>
+      <div className='flex min-h-0 flex-1 flex-col'>
+        <div className='border-b border-(--border-soft) bg-(--surface-panel-strong) md:hidden'>
+          <div className='flex items-center justify-between px-4 py-3'>
+            <SiteLogo />
+            <button
+              aria-controls={mobileMenuId}
+              aria-expanded={mobileMenuOpen}
+              aria-label='Open navigation menu'
+              className='inline-flex h-9 w-9 items-center justify-center rounded-lg border border-(--border-soft) bg-(--surface-base) text-(--text-muted) transition-colors duration-200 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
+              onClick={() => setMobileMenuOpen(true)}
+              type='button'
+            >
+              <Bars3Icon className='h-5 w-5' aria-hidden='true' />
+            </button>
+          </div>
+        </div>
+
+        <div
+          id={mobileMenuId}
+          className={`fixed inset-0 z-50 bg-(--surface-base) transition-all duration-300 ease-in-out md:hidden ${
+            mobileMenuOpen
+              ? "translate-y-0 opacity-100"
+              : "pointer-events-none -translate-y-full opacity-0"
+          }`}
+        >
+          <div className='flex h-full flex-col p-4'>
+            <div className='flex items-center justify-between border-b border-(--border-soft) pb-4'>
+              <SiteLogo />
+              <button
+                aria-label='Close navigation menu'
+                className='inline-flex h-9 w-9 items-center justify-center rounded-lg border border-(--border-soft) bg-(--surface-base) text-(--text-muted) transition-colors duration-200 hover:bg-(--surface-main-faint) hover:text-(--text-main)'
+                onClick={() => setMobileMenuOpen(false)}
+                type='button'
+              >
+                <XMarkIcon className='h-5 w-5' aria-hidden='true' />
+              </button>
+            </div>
+
+            <div className='flex min-h-0 flex-1 flex-col overflow-y-auto pt-4'>
+              <nav className='space-y-2'>
+                {sidebarItems.map((item) => {
+                  const isActive = isItemActive(item);
+                  const Icon = item.icon;
+
+                  return (
+                    <Link
+                      key={item.label}
+                      href={item.href}
+                      onClick={() => setMobileMenuOpen(false)}
+                      className={`group flex h-11 w-full items-center gap-3 rounded-2xl px-3 transition-colors duration-200 ${
+                        isActive
+                          ? "bg-(--surface-main-soft) text-(--text-main)"
+                          : "text-(--text-muted) hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+                      }`}
+                    >
+                      <Icon className='h-5 w-5 shrink-0' aria-hidden='true' />
+                      <span className='whitespace-nowrap text-sm font-semibold'>
+                        {item.label}
+                      </span>
+                    </Link>
+                  );
+                })}
+              </nav>
+
+              <div className='mt-auto space-y-3 pt-6'>
+                <ThemeTogglePill placement='inline' />
+                <SidebarProfile name='Tan Yu' onSignOut={signOut} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <main className='min-h-0 flex-1 overflow-y-auto'>
+          <div className='h-full p-5 sm:p-8 lg:p-10'>{children}</div>
+        </main>
+      </div>
       <ChatPopupToggle />
     </div>
   );

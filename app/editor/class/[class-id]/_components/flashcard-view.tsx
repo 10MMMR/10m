@@ -63,7 +63,7 @@ type FlashcardAnalysisPayload = {
   trend: TrendPoint[];
 };
 
-const MOCK_FLASHCARD_ANALYSIS: FlashcardAnalysisPayload = {
+const DEFAULT_FLASHCARD_ANALYSIS: FlashcardAnalysisPayload = {
   accuracy: 76,
   cardsReviewed: 20,
   mastery: 76,
@@ -114,6 +114,61 @@ const MOCK_FLASHCARD_ANALYSIS: FlashcardAnalysisPayload = {
   ],
 };
 
+const BIOL_101_FLASHCARD_ANALYSIS: FlashcardAnalysisPayload = {
+  accuracy: 84,
+  cardsReviewed: 24,
+  mastery: 84,
+  priorityFocus: "Cellular Respiration Sequence",
+  quickActions: [
+    { id: "review-mitosis-meiosis", label: "Review mitosis vs meiosis" },
+    { id: "practice-enzyme-graphs", label: "Practice enzyme activity graphs" },
+    { id: "drill-cell-organelles", label: "Drill organelle functions" },
+  ],
+  sections: [
+    {
+      id: "strengths",
+      kind: "strengths",
+      title: "Strengths",
+      skills: [
+        { id: "cell-structure", name: "Cell Structure", readiness: 92 },
+        { id: "membrane-transport", name: "Membrane Transport", readiness: 88 },
+      ],
+    },
+    {
+      id: "needs-improvement",
+      kind: "needs-improvement",
+      title: "Needs Improvement",
+      skills: [
+        { id: "photosynthesis-vs-respiration", name: "Photosynthesis vs Respiration", readiness: 61 },
+        { id: "meiosis-phases", name: "Meiosis Phases", readiness: 55 },
+        { id: "enzyme-regulation", name: "Enzyme Regulation", readiness: 58 },
+      ],
+    },
+  ],
+  strongestArea: "Membrane Transport",
+  suggestion:
+    "Your recall is strong on structures but weaker on process order. Add one timed sequence drill for glycolysis and the Krebs cycle each day.",
+  timeSpent: "14:12",
+  topics: [
+    { id: "cell-biology", readiness: 89, statusLabel: "Strong", title: "Cell Biology" },
+    { id: "energy-transformations", readiness: 59, statusLabel: "Needs Work", title: "Energy Transformations" },
+    { id: "cell-division", readiness: 66, statusLabel: "Developing", title: "Cell Division" },
+  ],
+  trend: [
+    { id: "mon", label: "Mon", value: 48 },
+    { id: "tue", label: "Tue", value: 54 },
+    { id: "wed", label: "Wed", value: 57 },
+    { id: "thu", label: "Thu", value: 63 },
+    { id: "fri", label: "Fri", value: 68 },
+    { id: "sat", label: "Sat", value: 76 },
+    { id: "sun", label: "Sun", value: 84 },
+  ],
+};
+
+const MOCK_FLASHCARD_ANALYSIS_BY_SESSION_ID: Record<string, FlashcardAnalysisPayload> = {
+  "mock-session-biol-101-flashcards": BIOL_101_FLASHCARD_ANALYSIS,
+};
+
 export function FlashcardView({ session }: FlashcardViewProps) {
   const [activeCardIndex, setActiveCardIndex] = useState(0);
   const [isAnswerVisible, setIsAnswerVisible] = useState(false);
@@ -138,9 +193,11 @@ export function FlashcardView({ session }: FlashcardViewProps) {
   const isAtFirstCard = activeCardIndex <= 0;
   const isAtLastCard = activeCardIndex >= session.cards.length - 1;
   const activeCardResult = activeCard ? cardResults[activeCard.id] ?? null : null;
+  const analysisData =
+    MOCK_FLASHCARD_ANALYSIS_BY_SESSION_ID[session.id] ?? DEFAULT_FLASHCARD_ANALYSIS;
   const masteryAngle = Math.max(
     0,
-    Math.min(360, (MOCK_FLASHCARD_ANALYSIS.mastery / 100) * 360),
+    Math.min(360, (analysisData.mastery / 100) * 360),
   );
 
   const moveCard = (direction: "previous" | "next") => {
@@ -189,253 +246,258 @@ export function FlashcardView({ session }: FlashcardViewProps) {
       <div className='mx-auto flex h-full w-full max-w-6xl flex-col px-4 py-6 sm:px-8 sm:py-8'>
         {viewMode === "analysis" ? (
           <div className='-mr-4 flex min-h-0 flex-1 flex-col overflow-y-auto pr-4 sm:-mr-8 sm:pr-8'>
-            <header className='mb-5 flex flex-wrap items-start justify-between gap-4'>
-              <div>
-                <p className='mono-label text-[11px] font-semibold uppercase tracking-[0.12em] text-(--text-muted)'>
-                  Flashcard Analysis
-                </p>
-                <h2 className='mt-1 text-4xl font-semibold leading-tight text-(--text-main)'>
-                  Your Performance Summary
-                </h2>
-                <p className='mt-2 text-base text-(--text-muted)'>
-                  Here&apos;s what you&apos;ve mastered and where to focus next.
-                </p>
-              </div>
-              <div className='flex flex-wrap items-center gap-2'>
-                <button
-                  className='rounded-full border border-(--border-soft) bg-(--surface-panel) px-4 py-2 text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)'
-                  onClick={handleBackToFlashcards}
-                  type='button'
-                >
-                  Back to flashcards
-                </button>
-                <button
-                  className='rounded-full border border-(--main) bg-(--main) px-4 py-2 text-sm font-semibold text-(--text-contrast) transition-colors duration-200 hover:bg-(--main-deep)'
-                  onClick={handleGenerateTailoredNotes}
-                  type='button'
-                >
-                  Generate tailored study notes
-                </button>
-              </div>
-            </header>
+            <div className='grid min-h-0 flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-stretch lg:gap-0'>
+              <div className='min-h-0 lg:pr-5'>
+                <header className='mb-5'>
+                  <p className='mono-label text-[11px] font-semibold uppercase tracking-[0.12em] text-(--text-muted)'>
+                    Flashcard Analysis
+                  </p>
+                  <h2 className='mt-1 text-4xl font-semibold leading-tight text-(--text-main)'>
+                    Your Performance Summary
+                  </h2>
+                  <p className='mt-2 text-base text-(--text-muted)'>
+                    Here&apos;s what you&apos;ve mastered and where to focus next.
+                  </p>
+                </header>
 
-            {notesToastMessage ? (
-              <div className='mb-4 rounded-xl border border-(--border-strong) bg-(--surface-main-soft) px-4 py-3 text-sm text-(--text-main)'>
-                {notesToastMessage}
-              </div>
-            ) : null}
+                {notesToastMessage ? (
+                  <div className='mb-4 rounded-xl border border-(--border-strong) bg-(--surface-main-soft) px-4 py-3 text-sm text-(--text-main)'>
+                    {notesToastMessage}
+                  </div>
+                ) : null}
 
-            <section className='mb-5 flex w-full flex-wrap overflow-hidden rounded-xl border border-(--border-soft) bg-(--surface-base) shadow-(--shadow-soft)'>
-              <article className='min-w-36 flex-1 border-r border-(--border-faint) px-4 py-3'>
-                <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
-                  Accuracy
-                </p>
-                <p className='mt-1 text-2xl font-semibold text-(--text-main)'>
-                  {MOCK_FLASHCARD_ANALYSIS.accuracy}%
-                </p>
-              </article>
-              <article className='min-w-36 flex-1 border-r border-(--border-faint) px-4 py-3'>
-                <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
-                  Time
-                </p>
-                <p className='mt-1 text-2xl font-semibold text-(--text-main)'>
-                  {MOCK_FLASHCARD_ANALYSIS.timeSpent}
-                </p>
-              </article>
-              <article className='min-w-36 flex-1 px-4 py-3'>
-                <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
-                  Cards
-                </p>
-                <p className='mt-1 text-2xl font-semibold text-(--text-main)'>
-                  {MOCK_FLASHCARD_ANALYSIS.cardsReviewed}
-                </p>
-              </article>
-            </section>
-
-            <div className='grid min-h-0 flex-1 grid-cols-1 gap-5 lg:grid-cols-3'>
-              <div className='min-h-0 space-y-5 lg:col-span-2'>
-                <section className='grid grid-cols-1 gap-4 2xl:grid-cols-2'>
-                  {MOCK_FLASHCARD_ANALYSIS.sections.map((section) => {
-                    const isStrengths = section.kind === "strengths";
-
-                    return (
-                      <article
-                        key={section.id}
-                        className='rounded-2xl border border-(--border-soft) bg-(--surface-base) p-5 shadow-(--shadow-soft)'
-                      >
-                        <div className='mb-4 flex items-center gap-2'>
-                          {isStrengths ? (
-                            <CheckBadgeIcon className='h-5 w-5 text-(--main)' aria-hidden='true' />
-                          ) : (
-                            <ExclamationCircleSolidIcon className='h-5 w-5 text-(--secondary-strong)' aria-hidden='true' />
-                          )}
-                          <h3 className='min-w-0 break-words text-2xl font-semibold leading-tight text-(--text-main) xl:text-3xl'>
-                            {section.title}
-                          </h3>
-                        </div>
-                        <div className='space-y-4'>
-                          {section.skills.map((skill) => (
-                            <div key={skill.id}>
-                              <div className='flex items-center justify-between gap-3 text-sm'>
-                                <p className='min-w-0 break-words text-(--text-body)'>{skill.name}</p>
-                                <p className='font-semibold text-(--text-main)'>
-                                  {skill.readiness}%
-                                </p>
-                              </div>
-                              <div className='mt-2 h-2.5 w-full overflow-hidden rounded-full bg-(--surface-main-xfaint)'>
-                                <div
-                                  className={`h-full rounded-full ${
-                                    isStrengths ? "bg-(--main)" : "bg-(--secondary-strong)"
-                                  }`}
-                                  style={{
-                                    width: `${Math.max(0, Math.min(100, skill.readiness))}%`,
-                                  }}
-                                />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </article>
-                    );
-                  })}
+                <section className='mb-5 flex w-full flex-wrap overflow-hidden rounded-xl border border-(--border-soft) bg-(--surface-base) shadow-(--shadow-soft) lg:max-w-xl'>
+                  <article className='min-w-36 flex-1 border-r border-(--border-faint) px-4 py-3'>
+                    <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
+                      Accuracy
+                    </p>
+                    <p className='mt-1 text-2xl font-semibold text-(--text-main)'>
+                      {analysisData.accuracy}%
+                    </p>
+                  </article>
+                  <article className='min-w-36 flex-1 border-r border-(--border-faint) px-4 py-3'>
+                    <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
+                      Time
+                    </p>
+                    <p className='mt-1 text-2xl font-semibold text-(--text-main)'>
+                      {analysisData.timeSpent}
+                    </p>
+                  </article>
+                  <article className='min-w-36 flex-1 px-4 py-3'>
+                    <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
+                      Cards
+                    </p>
+                    <p className='mt-1 text-2xl font-semibold text-(--text-main)'>
+                      {analysisData.cardsReviewed}
+                    </p>
+                  </article>
                 </section>
 
-                <section>
-                  <h3 className='text-4xl font-semibold text-(--text-main)'>Topic Breakdown</h3>
-                  <div className='mt-3 space-y-3'>
-                    {MOCK_FLASHCARD_ANALYSIS.topics.map((topic) => (
-                      <article
-                        key={topic.id}
-                        className='rounded-2xl border border-(--border-soft) bg-(--surface-base) p-4 shadow-(--shadow-soft)'
-                      >
-                        <div className='flex items-start justify-between gap-3'>
-                          <div className='min-w-0'>
-                            <p className='text-lg font-semibold text-(--text-main)'>
-                              {topic.title}
+                <div className='min-h-0 space-y-5'>
+                  <section className='grid grid-cols-1 gap-4 2xl:grid-cols-2'>
+                    {analysisData.sections.map((section) => {
+                      const isStrengths = section.kind === "strengths";
+
+                      return (
+                        <article
+                          key={section.id}
+                          className='rounded-2xl border border-(--border-soft) bg-(--surface-base) p-5 shadow-(--shadow-soft)'
+                        >
+                          <div className='mb-4 flex items-center gap-2'>
+                            {isStrengths ? (
+                              <CheckBadgeIcon className='h-5 w-5 text-(--main)' aria-hidden='true' />
+                            ) : (
+                              <ExclamationCircleSolidIcon className='h-5 w-5 text-(--secondary-strong)' aria-hidden='true' />
+                            )}
+                            <h3 className='min-w-0 break-words text-2xl font-semibold leading-tight text-(--text-main) xl:text-3xl'>
+                              {section.title}
+                            </h3>
+                          </div>
+                          <div className='space-y-4'>
+                            {section.skills.map((skill) => (
+                              <div key={skill.id}>
+                                <div className='flex items-center justify-between gap-3 text-sm'>
+                                  <p className='min-w-0 break-words text-(--text-body)'>{skill.name}</p>
+                                  <p className='font-semibold text-(--text-main)'>
+                                    {skill.readiness}%
+                                  </p>
+                                </div>
+                                <div className='mt-2 h-2.5 w-full overflow-hidden rounded-full bg-(--surface-main-xfaint)'>
+                                  <div
+                                    className={`h-full rounded-full ${
+                                      isStrengths ? "bg-(--main)" : "bg-(--secondary-strong)"
+                                    }`}
+                                    style={{
+                                      width: `${Math.max(0, Math.min(100, skill.readiness))}%`,
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </section>
+
+                  <section>
+                    <h3 className='text-4xl font-semibold text-(--text-main)'>Topic Breakdown</h3>
+                    <div className='mt-3 space-y-3'>
+                      {analysisData.topics.map((topic) => (
+                        <article
+                          key={topic.id}
+                          className='rounded-2xl border border-(--border-soft) bg-(--surface-base) p-4 shadow-(--shadow-soft)'
+                        >
+                          <div className='flex items-start justify-between gap-3'>
+                            <div className='min-w-0'>
+                              <p className='text-lg font-semibold text-(--text-main)'>
+                                {topic.title}
+                              </p>
+                            </div>
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${
+                                topic.statusLabel === "Strong"
+                                  ? "bg-(--surface-main-soft) text-(--main)"
+                                  : topic.statusLabel === "Developing"
+                                    ? "bg-(--surface-accent-soft) text-(--secondary-strong)"
+                                    : "bg-(--surface-user-soft) text-(--secondary-strong)"
+                              }`}
+                            >
+                              {topic.statusLabel}
+                            </span>
+                          </div>
+                          <div className='mt-3 flex items-center gap-3'>
+                            <div className='h-2.5 flex-1 overflow-hidden rounded-full bg-(--surface-main-xfaint)'>
+                              <div
+                                className={`h-full rounded-full ${
+                                  topic.statusLabel === "Strong"
+                                    ? "bg-(--main)"
+                                    : topic.statusLabel === "Developing"
+                                      ? "bg-(--secondary)"
+                                      : "bg-(--secondary-strong)"
+                                }`}
+                                style={{
+                                  width: `${Math.max(0, Math.min(100, topic.readiness))}%`,
+                                }}
+                              />
+                            </div>
+                            <p className='w-24 shrink-0 text-right text-sm font-semibold text-(--text-main)'>
+                              {topic.readiness}% ready
                             </p>
                           </div>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${
-                              topic.statusLabel === "Strong"
-                                ? "bg-(--surface-main-soft) text-(--main)"
-                                : topic.statusLabel === "Developing"
-                                  ? "bg-(--surface-accent-soft) text-(--secondary-strong)"
-                                  : "bg-(--surface-user-soft) text-(--secondary-strong)"
-                            }`}
-                          >
-                            {topic.statusLabel}
-                          </span>
-                        </div>
-                        <div className='mt-3 flex items-center gap-3'>
-                          <div className='h-2.5 flex-1 overflow-hidden rounded-full bg-(--surface-main-xfaint)'>
-                            <div
-                              className={`h-full rounded-full ${
-                                topic.statusLabel === "Strong"
-                                  ? "bg-(--main)"
-                                  : topic.statusLabel === "Developing"
-                                    ? "bg-(--secondary)"
-                                    : "bg-(--secondary-strong)"
-                              }`}
-                              style={{
-                                width: `${Math.max(0, Math.min(100, topic.readiness))}%`,
-                              }}
-                            />
-                          </div>
-                          <p className='w-24 shrink-0 text-right text-sm font-semibold text-(--text-main)'>
-                            {topic.readiness}% ready
-                          </p>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </section>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                </div>
               </div>
 
-              <aside className='space-y-4 lg:col-span-1'>
-                <section className='rounded-2xl border border-(--border-soft) bg-(--surface-base) p-5 shadow-(--shadow-soft)'>
-                  <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
-                    Mastery Overview
-                  </p>
-                  <div className='mt-4 grid place-items-center'>
-                    <div
-                      className='grid h-36 w-36 place-items-center rounded-full'
-                      style={{
-                        background: `conic-gradient(var(--main) ${masteryAngle}deg, var(--surface-main-xfaint) ${masteryAngle}deg 360deg)`,
-                      }}
+              <aside className='min-h-0 lg:self-stretch'>
+                <section className='rounded-2xl border border-(--border-soft) bg-(--surface-panel) p-5 shadow-(--shadow-soft) lg:h-full lg:rounded-none lg:border-y-0 lg:border-r-0 lg:border-l lg:shadow-none'>
+                  <div className='space-y-2'>
+                    <button
+                      className='w-full rounded-xl border border-(--border-soft) bg-(--surface-base) px-4 py-2 text-left text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)'
+                      onClick={handleBackToFlashcards}
+                      type='button'
                     >
-                      <div className='flex h-28 w-28 flex-col items-center justify-center gap-1 rounded-full bg-(--surface-base) text-center'>
-                        <p className='leading-none text-[42px] font-semibold text-(--text-main)'>
-                          {MOCK_FLASHCARD_ANALYSIS.mastery}%
-                        </p>
-                        <p className='mono-label w-[76px] text-center text-[8.5px] leading-[1.05] uppercase tracking-[0.06em] text-(--text-muted)'>
-                          Overall Mastery
-                        </p>
+                      Back to flashcards
+                    </button>
+                    <button
+                      className='w-full rounded-xl border border-(--main) bg-(--main) px-4 py-2 text-left text-sm font-semibold text-(--text-contrast) transition-colors duration-200 hover:bg-(--main-deep)'
+                      onClick={handleGenerateTailoredNotes}
+                      type='button'
+                    >
+                      Generate tailored study notes
+                    </button>
+                  </div>
+
+                  <div className='mt-5 border-t border-(--border-faint) pt-5'>
+                    <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
+                      Mastery Overview
+                    </p>
+                    <div className='mt-4 grid place-items-center'>
+                      <div
+                        className='grid h-36 w-36 place-items-center rounded-full'
+                        style={{
+                          background: `conic-gradient(var(--main) ${masteryAngle}deg, var(--surface-main-xfaint) ${masteryAngle}deg 360deg)`,
+                        }}
+                      >
+                        <div className='flex h-28 w-28 flex-col items-center justify-center gap-1 rounded-full bg-(--surface-base) text-center'>
+                          <p className='leading-none text-[42px] font-semibold text-(--text-main)'>
+                            {analysisData.mastery}%
+                          </p>
+                          <p className='mono-label w-[76px] text-center text-[8.5px] leading-[1.05] uppercase tracking-[0.06em] text-(--text-muted)'>
+                            Overall Mastery
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </section>
 
-                <section className='rounded-2xl border border-(--border-soft) bg-(--surface-base) p-5 shadow-(--shadow-soft)'>
-                  <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
-                    Learning Trend
-                  </p>
-                  <div className='mt-4 flex items-end gap-1.5'>
-                    {MOCK_FLASHCARD_ANALYSIS.trend.map((point, index) => (
-                      <div key={point.id} className='flex flex-1 flex-col items-center gap-1'>
-                        <div
-                          className={`w-full rounded-t-sm ${
-                            index >= MOCK_FLASHCARD_ANALYSIS.trend.length - 2
-                              ? "bg-(--main)"
-                              : "bg-(--surface-main-soft)"
-                          }`}
-                          style={{ height: `${Math.max(18, point.value)}px` }}
-                        />
-                        <p className='mono-label text-[9px] uppercase tracking-[0.08em] text-(--text-muted)'>
-                          {point.label}
-                        </p>
-                      </div>
-                    ))}
+                  <div className='mt-5 border-t border-(--border-faint) pt-5'>
+                    <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
+                      Learning Trend
+                    </p>
+                    <div className='mt-4 flex items-end gap-1.5'>
+                      {analysisData.trend.map((point, index) => (
+                        <div key={point.id} className='flex flex-1 flex-col items-center gap-1'>
+                          <div
+                            className={`w-full rounded-t-sm ${
+                              index >= analysisData.trend.length - 2
+                                ? "bg-(--main)"
+                                : "bg-(--surface-main-soft)"
+                            }`}
+                            style={{ height: `${Math.max(18, point.value)}px` }}
+                          />
+                          <p className='mono-label text-[9px] uppercase tracking-[0.08em] text-(--text-muted)'>
+                            {point.label}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </section>
 
-                <section className='rounded-2xl border border-(--border-soft) bg-(--surface-base) p-5 shadow-(--shadow-soft)'>
-                  <p className='text-sm font-semibold text-(--text-main)'>Smart Suggestions</p>
-                  <p className='mt-2 text-sm leading-6 text-(--text-muted)'>
-                    {MOCK_FLASHCARD_ANALYSIS.suggestion}
-                  </p>
-                </section>
-
-                <section className='rounded-2xl border border-(--border-soft) bg-(--surface-base) p-5 shadow-(--shadow-soft)'>
-                  <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
-                    Quick Actions
-                  </p>
-                  <div className='mt-3 space-y-2'>
-                    {MOCK_FLASHCARD_ANALYSIS.quickActions.map((action) => (
-                      <button
-                        key={action.id}
-                        className='flex w-full items-center justify-between rounded-xl border border-(--border-soft) bg-(--surface-panel) px-3 py-2.5 text-left text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)'
-                        type='button'
-                      >
-                        <span className='min-w-0 break-words pr-3'>{action.label}</span>
-                        <ChevronRightIcon className='h-4 w-4 text-(--text-muted)' aria-hidden='true' />
-                      </button>
-                    ))}
+                  <div className='mt-5 border-t border-(--border-faint) pt-5'>
+                    <p className='text-sm font-semibold text-(--text-main)'>Smart Suggestions</p>
+                    <div className='mt-3 rounded-xl border border-(--border-faint) bg-(--surface-panel-soft) px-3 py-3'>
+                      <p className='text-sm leading-6 text-(--text-muted)'>
+                        {analysisData.suggestion}
+                      </p>
+                    </div>
                   </div>
-                </section>
 
-                <section className='rounded-2xl border border-(--border-soft) bg-(--surface-base) p-5 shadow-(--shadow-soft)'>
-                  <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
-                    Priority Focus
-                  </p>
-                  <p className='mt-1 break-words text-base font-semibold text-(--text-main)'>
-                    {MOCK_FLASHCARD_ANALYSIS.priorityFocus}
-                  </p>
-                  <p className='mt-3 mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
-                    Strongest Area
-                  </p>
-                  <p className='mt-1 break-words text-base font-semibold text-(--text-main)'>
-                    {MOCK_FLASHCARD_ANALYSIS.strongestArea}
-                  </p>
+                  <div className='mt-5 border-t border-(--border-faint) pt-5'>
+                    <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
+                      Quick Actions
+                    </p>
+                    <div className='mt-3 space-y-2'>
+                      {analysisData.quickActions.map((action) => (
+                        <button
+                          key={action.id}
+                          className='flex w-full items-center justify-between rounded-xl border border-(--border-soft) bg-(--surface-base) px-3 py-2.5 text-left text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)'
+                          type='button'
+                        >
+                          <span className='min-w-0 break-words pr-3'>{action.label}</span>
+                          <ChevronRightIcon className='h-4 w-4 text-(--text-muted)' aria-hidden='true' />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className='mt-5 border-t border-(--border-faint) pt-5'>
+                    <p className='mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
+                      Priority Focus
+                    </p>
+                    <p className='mt-1 break-words text-base font-semibold text-(--text-main)'>
+                      {analysisData.priorityFocus}
+                    </p>
+                    <p className='mt-3 mono-label text-[10px] uppercase tracking-[0.12em] text-(--text-muted)'>
+                      Strongest Area
+                    </p>
+                    <p className='mt-1 break-words text-base font-semibold text-(--text-main)'>
+                      {analysisData.strongestArea}
+                    </p>
+                  </div>
                 </section>
               </aside>
             </div>

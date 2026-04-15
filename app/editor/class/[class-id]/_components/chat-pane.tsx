@@ -89,7 +89,7 @@ export function ChatPane({
           <div className="flex min-h-full items-center justify-center">
             <div className="flex max-w-[600px] flex-col items-center text-center">
               <Image
-                src="/duck-chat-no-bg.png"
+                src="/ducki-bubble.png"
                 alt="Duck mascot waiting for your first chat message"
                 width={600}
                 height={600}

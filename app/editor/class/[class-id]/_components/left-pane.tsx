@@ -10,6 +10,7 @@ import {
   FolderIcon,
   PlusIcon,
 } from "@heroicons/react/24/outline";
+import Image from "next/image";
 import Link from "next/link";
 import {
   useCallback,
@@ -18,6 +19,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type KeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -70,6 +72,7 @@ type LeftPaneProps = {
     targetNodeId: string,
     position: DropPosition,
   ) => void;
+  onRenameNode: (nodeId: string, nextTitle: string) => void | Promise<void>;
 };
 
 type DropIndicator = {
@@ -179,6 +182,20 @@ function getDefaultAddAction(kind: TreeNodeKind): TreeAddAction | null {
 
 function getDepthPadding(depth: number) {
   return `${depth * 16}px`;
+}
+
+function normalizePdfTitle(title: string) {
+  const trimmed = title.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.toLowerCase().endsWith(".pdf")) {
+    return trimmed;
+  }
+
+  return `${trimmed}.pdf`;
 }
 
 type RowActionsProps = {
@@ -365,6 +382,7 @@ export function LeftPane({
   onToggleExpanded,
   onMoveNode,
   onMoveSessionToTree,
+  onRenameNode,
 }: LeftPaneProps) {
   const asideRef = useRef<HTMLElement>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
@@ -378,6 +396,8 @@ export function LeftPane({
   const [openSessionMenuForId, setOpenSessionMenuForId] = useState<string | null>(
     null,
   );
+  const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [hasPaneFocus, setHasPaneFocus] = useState(true);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
   const [treeAreaRatio, setTreeAreaRatio] = useState(() => {
@@ -546,6 +566,50 @@ export function LeftPane({
     setOpenAddMenuForId(null);
     setOpenRowMenuForId(null);
     setOpenSessionMenuForId(null);
+  };
+
+  const beginRename = (node: TreeNode) => {
+    if (node.kind !== "folder" && node.kind !== "file") {
+      return;
+    }
+
+    closeAllMenus();
+    setRenamingNodeId(node.id);
+    setRenameDraft(node.title);
+  };
+
+  const cancelRename = () => {
+    setRenamingNodeId(null);
+    setRenameDraft("");
+  };
+
+  const commitRename = (node: TreeNode) => {
+    if (renamingNodeId !== node.id) {
+      return;
+    }
+
+    const trimmed = renameDraft.trim();
+    if (!trimmed) {
+      cancelRename();
+      return;
+    }
+
+    const nextTitle =
+      node.kind === "file"
+        ? normalizePdfTitle(trimmed)
+        : trimmed;
+    const currentTitle =
+      node.kind === "file"
+        ? normalizePdfTitle(node.title)
+        : node.title.trim();
+
+    cancelRename();
+
+    if (!nextTitle || nextTitle === currentTitle) {
+      return;
+    }
+
+    void onRenameNode(node.id, nextTitle);
   };
 
   const toggleAddMenu = (nodeId: string) => {
@@ -740,6 +804,7 @@ export function LeftPane({
       : isPaneMutedSelected
         ? "text-(--text-muted)"
         : "text-(--text-muted)";
+    const isRenaming = renamingNodeId === node.id;
 
     return (
       <div key={node.id}>
@@ -838,40 +903,82 @@ export function LeftPane({
               ) : null}
             </button>
 
-            <button
-              className='flex min-w-0 flex-1 items-start gap-1.5 text-left'
-              onClick={(event) =>
-                onSelectNode(node.id, {
-                  mode: event.shiftKey
-                    ? "range"
-                    : event.metaKey || event.ctrlKey
-                      ? "toggle"
-                      : "single",
-                  orderedNodeIds: visibleNodeIds,
-                })
-              }
-              type='button'
-            >
-              {Icon ? (
-                <span className='flex h-3.5 shrink-0 items-center'>
-                  <Icon className={`h-3.5 w-3.5 ${iconTone}`} aria-hidden='true' />
-                </span>
-              ) : (
-                <span className='flex h-3.5 w-1.5 shrink-0 items-center' aria-hidden='true'>
-                  <span className='h-1.5 w-1.5 rounded-full bg-(--note-indicator)' />
-                </span>
-              )}
-              <span className='min-w-0'>
-                <span className={`block truncate text-[13px] leading-tight ${titleTone}`}>
-                  {node.kind === "root" ? classLabel : node.title}
-                </span>
-                {node.kind !== "root" ? (
-                  <span className={`block text-[11px] leading-tight ${metaTone}`}>
-                    {formatUpdatedAt(node.updatedAt)}
+            {isRenaming ? (
+              <div className='flex min-w-0 flex-1 items-start gap-1.5'>
+                {Icon ? (
+                  <span className='flex h-3.5 shrink-0 items-center'>
+                    <Icon className={`h-3.5 w-3.5 ${iconTone}`} aria-hidden='true' />
                   </span>
-                ) : null}
-              </span>
-            </button>
+                ) : (
+                  <span className='flex h-3.5 w-1.5 shrink-0 items-center' aria-hidden='true'>
+                    <span className='h-1.5 w-1.5 rounded-full bg-(--note-indicator)' />
+                  </span>
+                )}
+                <span className='min-w-0 flex-1'>
+                  <input
+                    autoFocus
+                    className='block w-full rounded border border-(--border-strong) bg-(--surface-input) px-1.5 py-0.5 text-[13px] leading-tight text-(--text-main) outline-none'
+                    onBlur={() => commitRename(node)}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        commitRename(node);
+                        return;
+                      }
+
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelRename();
+                      }
+                    }}
+                    value={renameDraft}
+                  />
+                  {node.kind !== "root" ? (
+                    <span className={`block text-[11px] leading-tight ${metaTone}`}>
+                      {formatUpdatedAt(node.updatedAt)}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+            ) : (
+              <button
+                className='flex min-w-0 flex-1 items-start gap-1.5 text-left'
+                onDoubleClick={() => beginRename(node)}
+                onClick={(event) =>
+                  onSelectNode(node.id, {
+                    mode: event.shiftKey
+                      ? "range"
+                      : event.metaKey || event.ctrlKey
+                        ? "toggle"
+                        : "single",
+                    orderedNodeIds: visibleNodeIds,
+                  })
+                }
+                type='button'
+              >
+                {Icon ? (
+                  <span className='flex h-3.5 shrink-0 items-center'>
+                    <Icon className={`h-3.5 w-3.5 ${iconTone}`} aria-hidden='true' />
+                  </span>
+                ) : (
+                  <span className='flex h-3.5 w-1.5 shrink-0 items-center' aria-hidden='true'>
+                    <span className='h-1.5 w-1.5 rounded-full bg-(--note-indicator)' />
+                  </span>
+                )}
+                <span className='min-w-0'>
+                  <span className={`block truncate text-[13px] leading-tight ${titleTone}`}>
+                    {node.kind === "root" ? classLabel : node.title}
+                  </span>
+                  {node.kind !== "root" ? (
+                    <span className={`block text-[11px] leading-tight ${metaTone}`}>
+                      {formatUpdatedAt(node.updatedAt)}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            )}
             <RowActions
               node={node}
               isAddMenuOpen={openAddMenuForId === node.id}
@@ -957,10 +1064,16 @@ export function LeftPane({
           <div className='flex items-center gap-2 border-b border-(--border-soft) px-2.5 py-2'>
             <Link
               aria-label='Go to app dashboard'
-              className='grid h-8 w-8 place-items-center rounded-full bg-(--surface-panel-strong) text-[9px] font-extrabold text-(--text-main) transition-opacity duration-150 hover:opacity-90'
+              className='relative h-8 w-8 overflow-hidden transition-opacity duration-150 hover:opacity-90'
               href='/app'
             >
-              10M
+              <Image
+                src='/sprout.ico'
+                alt='Sprout'
+                fill
+                sizes='36px'
+                className='object-cover'
+              />
             </Link>
             <div className='min-w-0 flex-1'>
               <h2 className='m-0 truncate text-lg leading-tight'>{classLabel}</h2>

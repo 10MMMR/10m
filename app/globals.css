@@ -44,6 +44,8 @@
   --font-body: "Satoshi";
   --font-display: "Satoshi";
   --font-mono: "Satoshi";
+  --font-editor: "Satoshi";
+  --font-onest: "Satoshi";
   color-scheme: light;
 
   --background: #fdfcf8;
@@ -361,7 +363,7 @@ input:focus-visible {
 }
 
 .chat-markdown strong {
-  color: var(--text-main);
+  color: var(--main);
   font-weight: 700;
 }
 

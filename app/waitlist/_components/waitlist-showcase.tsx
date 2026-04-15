@@ -297,6 +297,17 @@ export function WaitlistShowcase() {
           outline: none !important;
           outline-offset: 0 !important;
         }
+
+        [data-waitlist-form] input:-webkit-autofill,
+        [data-waitlist-form] input:-webkit-autofill:hover,
+        [data-waitlist-form] input:-webkit-autofill:focus,
+        [data-waitlist-form] input:-webkit-autofill:active {
+          -webkit-text-fill-color: var(--text-main);
+          -webkit-box-shadow: 0 0 0 1000px transparent inset;
+          box-shadow: 0 0 0 1000px transparent inset;
+          caret-color: var(--text-main);
+          transition: background-color 9999s ease-out 0s;
+        }
       `}</style>
     </>
   );

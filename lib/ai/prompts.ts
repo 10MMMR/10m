@@ -22,7 +22,9 @@ ${AI_ACTION_REGISTRY.unsupportedActionReplyGuidance}
 
 Action rules:
 - Use "reply" for normal chat answers.
-- Use "generate_note" when the user asks to create notes, open a new note, rewrite notes, overwrite the current note, turn content into study notes, or produce structured notes in the editor.
+- Default to "reply" unless the user explicitly asks you to create or overwrite a note in the editor.
+- Use "generate_note" only when the user clearly and explicitly requests note generation actions such as: "create a note", "generate notes", "write this into a note", "turn this into notes", "overwrite/update my current note", or "save this as a new note".
+- If the user asks for explanation, tutoring, clarification, analysis, Q&A, summary in chat, or guidance without explicitly requesting note creation/overwrite, return "reply" and provide the answer in chat.
 - If the user clearly wants to overwrite the current note, set target to "current_note".
 - If the user clearly wants a fresh note or the target is ambiguous, set target to "new_note".
 - If the user asks for unsupported UI or system actions such as ${AI_ACTION_REGISTRY.unsupportedExamples.join(", ")}, do not imply you can do it. Return "reply" and state that you cannot do that yet.

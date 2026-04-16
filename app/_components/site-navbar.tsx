@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SiteLogo } from "./site-logo";
 
-const navbarVisibleRoutes = ["/", "/waitlist", "/login", "/signup"];
+const navbarVisibleRoutes = ["/", "/login", "/signup"];
 
 function normalizePath(pathname: string) {
   if (pathname.length > 1 && pathname.endsWith("/")) {

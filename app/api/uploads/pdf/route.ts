@@ -26,6 +26,12 @@ type DeleteRequestBody = {
   nodeIds?: unknown;
 };
 
+type RenameRequestBody = {
+  classId?: unknown;
+  fileName?: unknown;
+  nodeId?: unknown;
+};
+
 function getBearerToken(request: Request) {
   const authHeader = request.headers.get("authorization");
 
@@ -66,6 +72,20 @@ function sanitizePdfFileName(fileName: string) {
     .toLowerCase()
     .replace(/[^a-z0-9.-]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function normalizePdfFileName(fileName: string) {
+  const trimmed = fileName.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.toLowerCase().endsWith(".pdf")) {
+    return trimmed;
+  }
+
+  return `${trimmed}.pdf`;
 }
 
 function buildPdfStoragePath(
@@ -139,6 +159,38 @@ function getNodeIds(value: unknown) {
   }
 
   return nextNodeIds;
+}
+
+function getFileName(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = normalizePdfFileName(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function buildRenamedPdfStoragePath(currentPath: string, nextFileName: string) {
+  const normalizedFileName = normalizePdfFileName(nextFileName);
+  const safeFileName = sanitizePdfFileName(normalizedFileName);
+
+  if (!safeFileName) {
+    return null;
+  }
+
+  const lastSlashIndex = currentPath.lastIndexOf("/");
+
+  if (lastSlashIndex < 0) {
+    return safeFileName;
+  }
+
+  const prefix = currentPath.slice(0, lastSlashIndex + 1);
+  return `${prefix}${safeFileName}`;
 }
 
 function createFileNode(
@@ -408,4 +460,138 @@ export async function DELETE(request: Request) {
     removedPaths: filePaths,
     tree: savedTree,
   });
+}
+
+export async function PATCH(request: Request) {
+  const authResult = await getAuthenticatedUser(request);
+
+  if ("error" in authResult) {
+    return NextResponse.json(
+      { error: authResult.error },
+      { status: authResult.status },
+    );
+  }
+
+  const patchRateLimit = await consumeRateLimit({
+    config: API_RATE_LIMITS.uploadsPdfPatch,
+    identity: getRateLimitIdentity(request, authResult.user.id),
+  });
+
+  if (!patchRateLimit.allowed) {
+    return createRateLimitResponse(
+      patchRateLimit,
+      "Too many rename requests. Please wait before retrying.",
+    );
+  }
+
+  const bucket = getSupabasePdfStorageBucket();
+
+  if (!bucket) {
+    return NextResponse.json(
+      { error: "Supabase storage is not configured." },
+      { status: 500 },
+    );
+  }
+
+  const body = (await request.json().catch(() => null)) as RenameRequestBody | null;
+  const classId = getClassId(body?.classId);
+  const nodeId = getNodeId(body?.nodeId);
+  const fileName = getFileName(body?.fileName);
+
+  if (!classId) {
+    return NextResponse.json({ error: "Invalid classId." }, { status: 400 });
+  }
+
+  if (!nodeId) {
+    return NextResponse.json({ error: "Invalid nodeId." }, { status: 400 });
+  }
+
+  if (!fileName) {
+    return NextResponse.json({ error: "Invalid fileName." }, { status: 400 });
+  }
+
+  const { supabase } = authResult;
+  const repository = new SupabaseTreeRepository(supabase);
+  let currentTree: TreeNode[];
+
+  try {
+    currentTree = await repository.listTreeByClass(classId);
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "Unable to load class tree.",
+      },
+      { status: 400 },
+    );
+  }
+
+  const fileNode = currentTree.find((node) => node.id === nodeId);
+
+  if (!fileNode || fileNode.kind !== "file") {
+    return NextResponse.json({ error: "Invalid file node." }, { status: 400 });
+  }
+
+  if (!fileNode.fileStoragePath) {
+    return NextResponse.json(
+      { error: "File node is missing a storage path." },
+      { status: 400 },
+    );
+  }
+
+  const normalizedTitle = normalizePdfFileName(fileName);
+  const nextStoragePath = buildRenamedPdfStoragePath(
+    fileNode.fileStoragePath,
+    normalizedTitle,
+  );
+
+  if (!nextStoragePath) {
+    return NextResponse.json({ error: "Invalid fileName." }, { status: 400 });
+  }
+
+  if (nextStoragePath !== fileNode.fileStoragePath) {
+    const { error: moveError } = await supabase.storage
+      .from(bucket)
+      .move(fileNode.fileStoragePath, nextStoragePath);
+
+    if (moveError) {
+      return NextResponse.json(
+        { error: "Unable to rename PDF in Supabase Storage." },
+        { status: 500 },
+      );
+    }
+  }
+
+  const nextFileNode: TreeNode = {
+    ...fileNode,
+    fileStoragePath: nextStoragePath,
+    title: normalizedTitle,
+    updatedAt: new Date().toISOString(),
+  };
+  const nextTree = currentTree.map((node) =>
+    node.id === nextFileNode.id ? nextFileNode : node,
+  );
+
+  try {
+    const savedTree = await repository.replaceTree(classId, nextTree);
+    const savedFileNode =
+      savedTree.find((node) => node.id === nextFileNode.id) ?? nextFileNode;
+
+    return NextResponse.json({
+      fileNode: savedFileNode,
+      tree: savedTree,
+    });
+  } catch (error) {
+    if (nextStoragePath !== fileNode.fileStoragePath) {
+      await supabase.storage.from(bucket).move(nextStoragePath, fileNode.fileStoragePath);
+    }
+
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "Unable to save PDF metadata.",
+      },
+      { status: 500 },
+    );
+  }
 }

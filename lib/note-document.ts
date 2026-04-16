@@ -581,7 +581,9 @@ function isValidNode(value: unknown, options: ValidationOptions): value is NoteD
       return Array.isArray(value.content) &&
         value.content.length > 0 &&
         value.content.every((item) =>
-          isValidNode(item, options) && TABLE_CELL_BLOCK_TYPES.has(item.type)
+          isValidNode(item, options) &&
+          typeof item.type === "string" &&
+          TABLE_CELL_BLOCK_TYPES.has(item.type)
         );
     case "equationBlock":
       if (!options.allowEquationBlock || !isRecord(attrs)) {

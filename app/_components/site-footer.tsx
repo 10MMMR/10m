@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { SiteLogo } from "./site-logo";
 
-const hiddenPrefixes = ["/app", "/editor"];
+const hiddenPrefixes = ["/app", "/editor", "/waitlist"];
 
 export function SiteFooter() {
   const pathname = usePathname();

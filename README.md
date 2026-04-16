@@ -419,15 +419,15 @@ Supabase-related environment variables used by the AI and storage flows:
 Install dependencies, then run the app:
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 Useful scripts:
 
 ```bash
-npm run lint
-npm test
+pnpm run lint
+pnpm test
 ```
 
 ## Key Files

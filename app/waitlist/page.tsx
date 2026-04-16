@@ -3,7 +3,7 @@ import { WaitlistShowcase } from "./_components/waitlist-showcase";
 export default function WaitlistPage() {
   return (
     <main
-      className="relative flex min-h-dvh items-center overflow-hidden bg-(--background) px-4 py-6 sm:px-6 sm:py-10"
+      className="relative flex min-h-dvh items-start overflow-hidden bg-(--background) px-4 py-6 sm:items-center sm:px-6 sm:py-10"
       style={{
         backgroundImage:
           "url('/sprout_waitlist_background.svg'), radial-gradient(circle at 18% 10%, var(--surface-main-xfaint), transparent 46%), radial-gradient(circle at 84% 92%, var(--surface-accent-soft), transparent 48%)",

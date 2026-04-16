@@ -96,11 +96,12 @@ export function AppShell({ children }: AppShellProps) {
     if (!supabase || !user) {
       return;
     }
+    const client = supabase;
 
     let ignore = false;
 
     const loadClasses = async () => {
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from("classes")
         .select("id, name")
         .eq("user_id", user.id)

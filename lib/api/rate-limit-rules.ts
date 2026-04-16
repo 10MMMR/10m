@@ -26,6 +26,11 @@ export const API_RATE_LIMITS = {
     limit: 30,
     windowMs: 60_000,
   },
+  uploadsPdfPatch: {
+    key: "api:uploads:pdf:patch",
+    limit: 30,
+    windowMs: 60_000,
+  },
   uploadsPdfPost: {
     key: "api:uploads:pdf:post",
     limit: 12,

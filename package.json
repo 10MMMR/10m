@@ -2,24 +2,27 @@
   "name": "10m",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@9.15.0",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "verify": "pnpm test && pnpm build"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
     "@supabase/supabase-js": "^2.101.0",
+    "@tiptap/core": "^3.20.5",
     "@tiptap/extension-highlight": "^3.20.5",
     "@tiptap/extension-image": "^3.20.5",
     "@tiptap/extension-table": "^3.20.5",
     "@tiptap/extension-table-cell": "^3.20.5",
     "@tiptap/extension-table-header": "^3.20.5",
     "@tiptap/extension-table-row": "^3.20.5",
-    "@tiptap/extension-text-align": "^3.21.0",
+    "@tiptap/extension-text-align": "^3.20.5",
     "@tiptap/extension-text-style": "^3.20.5",
     "@tiptap/extension-underline": "^3.20.5",
     "@tiptap/react": "^3.20.5",
@@ -51,5 +54,11 @@
     "tailwindcss": "^4",
     "ts-jest": "^29.4.6",
     "typescript": "^5"
+  },
+  "pnpm": {
+    "overrides": {
+      "@tiptap/core": "3.20.5",
+      "@tiptap/pm": "3.20.5"
+    }
   }
 }

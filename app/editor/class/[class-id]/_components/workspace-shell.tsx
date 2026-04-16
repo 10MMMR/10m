@@ -131,6 +131,12 @@ type DeletePdfResponse = {
   treeUpdated?: boolean;
 };
 
+type RenamePdfResponse = {
+  error?: string;
+  fileNode?: TreeNode;
+  tree?: TreeNode[];
+};
+
 type SelectedPdfDocument = {
   title: string;
   dataUrl: string;
@@ -181,6 +187,7 @@ type RateLimitedAction =
   | "deletePdf"
   | "invalidDocLog"
   | "noteGeneration"
+  | "renamePdf"
   | "uploadImage"
   | "uploadPdf";
 
@@ -522,6 +529,20 @@ function sanitizeImageSourcesForPersistence(document: NoteDocument) {
 function isPdfFile(file: File) {
   const fileName = file.name.toLowerCase();
   return file.type === "application/pdf" || fileName.endsWith(".pdf");
+}
+
+function normalizePdfTitle(title: string) {
+  const trimmed = title.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.toLowerCase().endsWith(".pdf")) {
+    return trimmed;
+  }
+
+  return `${trimmed}.pdf`;
 }
 
 function parentHasChildren(nodes: TreeNode[], parentId: string) {
@@ -2492,6 +2513,122 @@ export function WorkspaceShell({
     }
   };
 
+  const handleRenameNode = async (nodeId: string, nextTitle: string) => {
+    const node = treeNodesRef.current.find((item) => item.id === nodeId);
+
+    if (!node || node.kind === "root" || node.kind === "note") {
+      return;
+    }
+
+    const trimmedTitle = nextTitle.trim();
+    if (!trimmedTitle) {
+      return;
+    }
+
+    if (node.kind === "folder") {
+      const normalizedCurrent = node.title.trim();
+      if (trimmedTitle === normalizedCurrent) {
+        return;
+      }
+
+      try {
+        await persistTree(
+          updateNodeInTree(treeNodesRef.current, {
+            ...node,
+            title: trimmedTitle,
+            updatedAt: new Date().toISOString(),
+          }),
+        );
+      } catch (error) {
+        setUploadFeedback({
+          type: "error",
+          message:
+            error instanceof Error ? error.message : "Unable to rename folder.",
+        });
+      }
+
+      return;
+    }
+
+    if (!node.fileStoragePath) {
+      setUploadFeedback({
+        type: "error",
+        message: "File is missing a storage path.",
+      });
+      return;
+    }
+
+    const normalizedTitle = normalizePdfTitle(trimmedTitle);
+    if (!normalizedTitle) {
+      return;
+    }
+
+    const normalizedCurrentTitle = normalizePdfTitle(node.title);
+    if (normalizedTitle === normalizedCurrentTitle) {
+      return;
+    }
+
+    const renameCooldownSeconds = getRemainingCooldown("renamePdf");
+    if (renameCooldownSeconds > 0) {
+      setUploadFeedback({
+        type: "error",
+        message: `Rename is temporarily rate limited. Try again in ${formatRetryDelay(renameCooldownSeconds)}.`,
+      });
+      return;
+    }
+
+    try {
+      const accessToken = await getAccessToken();
+
+      if (!accessToken) {
+        throw new Error(AUTH_REQUIRED_MESSAGE);
+      }
+
+      const response = await fetch("/api/uploads/pdf", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          classId,
+          fileName: normalizedTitle,
+          nodeId: node.id,
+        }),
+      });
+      const payload = (await response
+        .json()
+        .catch(() => null)) as RenamePdfResponse | null;
+      const renameRateLimit = parseRateLimit(
+        response,
+        payload?.error || "Too many rename requests. Please wait before retrying.",
+      );
+
+      if (renameRateLimit.isRateLimited) {
+        setCooldown("renamePdf", renameRateLimit);
+        throw new Error(
+          `${renameRateLimit.message} Try again in ${formatRetryDelay(renameRateLimit.retryInSeconds)}.`,
+        );
+      }
+
+      if (!response.ok || !payload?.tree || !payload.fileNode) {
+        throw new Error(payload?.error || "Unable to rename PDF.");
+      }
+
+      setTreeNodes(payload.tree);
+      treeNodesRef.current = payload.tree;
+      setUploadFeedback({
+        type: "success",
+        message: `Renamed to ${payload.fileNode.title}`,
+      });
+    } catch (error) {
+      setUploadFeedback({
+        type: "error",
+        message: error instanceof Error ? error.message : "Unable to rename PDF.",
+      });
+    }
+  };
+
   const handleMoveNode = (
     dragNodeId: string,
     targetNodeId: string,
@@ -2976,6 +3113,8 @@ export function WorkspaceShell({
     setMessagesForContext(sourceContextId, nextMessages);
     setChatInput("");
     setIsChatStreaming(true);
+    let assistantMessage: ReturnType<typeof createMessage> | null = null;
+    let nextMessagesWithAssistant = nextMessages;
 
     try {
       const controller = new AbortController();
@@ -3035,18 +3174,18 @@ export function WorkspaceShell({
           payload?.error || "Unable to contact the chat assistant.",
         );
       }
-      const assistantMessage = createMessage(
+      assistantMessage = createMessage(
         "assistant",
         payload.assistant.message,
       );
+      nextMessagesWithAssistant = [...nextMessages, assistantMessage];
 
       if (payload.assistant.action === "reply") {
-        setMessagesForContext(sourceContextId, [
-          ...nextMessages,
-          assistantMessage,
-        ]);
+        setMessagesForContext(sourceContextId, nextMessagesWithAssistant);
         return;
       }
+
+      setMessagesForContext(sourceContextId, nextMessagesWithAssistant);
 
       const { sourceNodes, snapshot } = buildGenerationSourceSnapshot(
         treeNodesRef.current,
@@ -3075,10 +3214,7 @@ export function WorkspaceShell({
         : generatedNode.id;
 
       if (successContextId === sourceContextId) {
-        setMessagesForContext(sourceContextId, [
-          ...nextMessages,
-          assistantMessage,
-        ]);
+        setMessagesForContext(sourceContextId, nextMessagesWithAssistant);
       } else {
         setMessagesForContext(successContextId, [
           userMessage,
@@ -3094,8 +3230,10 @@ export function WorkspaceShell({
         const targetContextId = error.targetContextId || sourceContextId;
         const priorMessages =
           targetContextId === sourceContextId
-            ? nextMessages
-            : (chatSessions[targetContextId] ?? [userMessage]);
+            ? nextMessagesWithAssistant
+            : assistantMessage
+              ? (chatSessions[targetContextId] ?? [userMessage, assistantMessage])
+              : (chatSessions[targetContextId] ?? [userMessage]);
 
         setMessagesForContext(targetContextId, [
           ...priorMessages,
@@ -3301,6 +3439,7 @@ export function WorkspaceShell({
           onToggleExpanded={handleToggleExpanded}
           onMoveNode={handleMoveNode}
           onMoveSessionToTree={handleMoveSessionToTree}
+          onRenameNode={handleRenameNode}
         />
         {activeFlashcardSession ? (
           <FlashcardView key={activeFlashcardSession.id} session={activeFlashcardSession} />

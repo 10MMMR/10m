@@ -90,10 +90,10 @@ export function AppShell({ children }: AppShellProps) {
       ),
     [classes],
   );
+  const visibleClasses = user ? sortedClasses : [];
 
   useEffect(() => {
     if (!supabase || !user) {
-      setClasses([]);
       return;
     }
 
@@ -177,9 +177,9 @@ export function AppShell({ children }: AppShellProps) {
                       </span>
                     </Link>
 
-                    {isClassesItem && sortedClasses.length > 0 ? (
+                    {isClassesItem && visibleClasses.length > 0 ? (
                       <div className='mt-2 space-y-1 pl-4'>
-                        {sortedClasses.map((classItem) => {
+                        {visibleClasses.map((classItem) => {
                           const className = classItem.name?.trim() || "Untitled class";
                           const classHref = `/app/classes/${classItem.id}`;
                           const isClassActive =

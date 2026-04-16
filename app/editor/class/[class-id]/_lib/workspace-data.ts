@@ -91,6 +91,34 @@ const workspaceSeeds = {
     ],
     messages: [],
   },
+  "biol-101": {
+    classId: "biol-101",
+    workspaceName: "Lumina Study",
+    classLabel: "BIOL-101",
+    unitTitle: "Unit 2: Cells and Energy",
+    unitDescription:
+      "Core BIOL-101 review on cell structure, membrane transport, cellular respiration, and cell division for quiz-style prompts.",
+    sectionTitle: "1. Cell Biology Foundations",
+    sectionBody:
+      "BIOL-101 focuses on connecting structures to function. Questions often require you to compare related processes and identify where each step occurs.",
+    scopeLabel: "Scope: Unit 2 + 1 lab",
+    tableHeaders: ["Topic", "Exam focus", "Anchor idea"],
+    explorerItems: [
+      { title: "BIOL-101", type: "course", checked: true, active: true },
+      { title: "Unit 2: Cells and Energy", type: "unit", checked: true, active: true },
+      { title: "Lecture Notes", type: "material", checked: true, active: true },
+      { title: "Lab Handout", type: "material", checked: true },
+      { title: "Practice Quiz", type: "material", checked: false },
+    ],
+    sessions: ["Cells review", "Respiration drill", "Quiz corrections"],
+    approaches: [
+      ["Cell structure", "Match organelle to function", "Structure determines role"],
+      ["Membrane transport", "Passive vs active transport", "Gradient + energy use"],
+      ["Cellular respiration", "Stage sequencing", "ATP production pathway"],
+      ["Cell division", "Mitosis vs meiosis comparison", "Growth vs gamete formation"],
+    ],
+    messages: [],
+  },
   "calc2-integration": {
     classId: "calc2-integration",
     workspaceName: "Lumina Study",
@@ -138,5 +166,16 @@ export function getWorkspaceSeed(classId: string): WorkspaceSeed {
     return workspaceSeeds[normalizedClassId];
   }
 
-  return workspaceSeeds[DEFAULT_CLASS_ID];
+  const defaultSeed = workspaceSeeds[DEFAULT_CLASS_ID];
+
+  return {
+    ...defaultSeed,
+    classId: normalizedClassId,
+    classLabel: normalizedClassId,
+    explorerItems: defaultSeed.explorerItems.map((item, index) =>
+      index === 0 && item.type === "course"
+        ? { ...item, title: normalizedClassId }
+        : item,
+    ),
+  };
 }

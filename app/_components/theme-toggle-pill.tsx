@@ -13,7 +13,7 @@ type ThemeTogglePillProps = {
 
 const STORAGE_KEY = "theme";
 const THEME_CHANGE_EVENT = "theme-change";
-const dashboardPrefixes = ["/app"];
+const dashboardPrefixes = ["/app", "/editor", "/waitlist"];
 
 function readThemePreference(): ThemeMode | null {
   if (typeof window === "undefined") {

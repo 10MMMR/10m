@@ -4,6 +4,7 @@ import {
 } from "./actions";
 import {
   parseAiNoteDocument,
+  parseNoteDocument,
   type NoteDocument,
 } from "@/lib/note-document";
 
@@ -183,5 +184,16 @@ export function parseAssistantCommand(raw: string): AssistantCommand {
 export function normalizeGeneratedNoteDocument(raw: string): NoteDocument {
   const parsed = tryParseJson(raw);
   const document = unwrapNoteDocument(parsed);
-  return parseAiNoteDocument(document);
+
+  try {
+    return parseAiNoteDocument(document);
+  } catch (aiValidationError) {
+    try {
+      // Fallback for provider outputs that are valid TipTap docs but include
+      // non-AI-specific formatting details (for example textStyle marks).
+      return parseNoteDocument(document);
+    } catch {
+      throw aiValidationError;
+    }
+  }
 }

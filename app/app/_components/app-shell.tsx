@@ -12,8 +12,9 @@ import {
 } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, type ComponentType, type SVGProps } from "react";
+import { useEffect, useMemo, useState, type ComponentType, type SVGProps } from "react";
 import { useAuth } from "@/app/_global/authentication/auth-context";
+import { supabase } from "@/app/_global/authentication/supabaseClient";
 import { SiteLogo } from "@/app/_components/site-logo";
 import { ThemeTogglePill } from "@/app/_components/theme-toggle-pill";
 import { ChatPopupToggle } from "./chat-popup-toggle";
@@ -32,6 +33,11 @@ type SidebarItem = {
   label: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   match?: "exact" | "prefix";
+};
+
+type ClassSidebarItem = {
+  id: string;
+  name: string | null;
 };
 
 const sidebarItems: SidebarItem[] = [
@@ -61,7 +67,8 @@ const sidebarItems: SidebarItem[] = [
 export function AppShell({ children }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { signOut } = useAuth();
+  const [classes, setClasses] = useState<ClassSidebarItem[]>([]);
+  const { signOut, user } = useAuth();
   const pathname = usePathname();
   const mobileMenuId = "app-mobile-menu";
   const sidebarWidth = collapsed
@@ -74,6 +81,48 @@ export function AppShell({ children }: AppShellProps) {
     item.match === "exact"
       ? pathname === item.href
       : pathname === item.href || pathname.startsWith(`${item.href}/`);
+  const sortedClasses = useMemo(
+    () =>
+      [...classes].sort((a, b) =>
+        (a.name ?? "").localeCompare(b.name ?? "", undefined, {
+          sensitivity: "base",
+        }),
+      ),
+    [classes],
+  );
+  const visibleClasses = user ? sortedClasses : [];
+
+  useEffect(() => {
+    if (!supabase || !user) {
+      return;
+    }
+    const client = supabase;
+
+    let ignore = false;
+
+    const loadClasses = async () => {
+      const { data, error } = await client
+        .from("classes")
+        .select("id, name")
+        .eq("user_id", user.id)
+        .order("name", { ascending: true });
+
+      if (ignore || error) {
+        if (!ignore && error) {
+          setClasses([]);
+        }
+        return;
+      }
+
+      setClasses(data ?? []);
+    };
+
+    void loadClasses();
+
+    return () => {
+      ignore = true;
+    };
+  }, [user]);
 
   return (
     <div className='workspace-shell flex h-[100dvh] flex-1 overflow-hidden'>
@@ -106,34 +155,61 @@ export function AppShell({ children }: AppShellProps) {
             <SiteLogo />
           </div>
 
-          <nav className='mt-8 space-y-2 pb-32'>
-            {sidebarItems.map((item) => {
-              const isActive = isItemActive(item);
-              const Icon = item.icon;
+          <div className='mt-8 min-h-0 flex-1 overflow-y-auto pb-6 pr-1'>
+            <nav className='space-y-2'>
+              {sidebarItems.map((item) => {
+                const isActive = isItemActive(item);
+                const Icon = item.icon;
+                const isClassesItem = item.href === "/app/classes";
 
-              return (
-                <Link
-                  key={item.label}
-                  href={item.href}
-                  className={`group flex h-11 w-full items-center gap-3 rounded-2xl px-3 transition-colors duration-200 ${
-                    isActive
-                      ? "bg-(--surface-main-soft) text-(--text-main)"
-                      : "text-(--text-muted) hover:bg-(--surface-main-faint) hover:text-(--text-main)"
-                  }`}
-                >
-                  <Icon className='h-5 w-5 shrink-0' aria-hidden='true' />
-                  <span className='whitespace-nowrap text-sm font-semibold'>
-                    {item.label}
-                  </span>
-                </Link>
-              );
-            })}
-          </nav>
+                return (
+                  <div key={item.label}>
+                    <Link
+                      href={item.href}
+                      className={`group flex h-11 w-full items-center gap-3 rounded-2xl px-3 transition-colors duration-200 ${
+                        isActive
+                          ? "bg-(--surface-main-soft) text-(--text-main)"
+                          : "text-(--text-muted) hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+                      }`}
+                    >
+                      <Icon className='h-5 w-5 shrink-0' aria-hidden='true' />
+                      <span className='whitespace-nowrap text-sm font-semibold'>
+                        {item.label}
+                      </span>
+                    </Link>
 
-          <div
-            className='absolute right-3 left-3 space-y-3'
-            style={{ bottom: "1.2rem" }}
-          >
+                    {isClassesItem && visibleClasses.length > 0 ? (
+                      <div className='mt-2 space-y-1 pl-4'>
+                        {visibleClasses.map((classItem) => {
+                          const className = classItem.name?.trim() || "Untitled class";
+                          const classHref = `/app/classes/${classItem.id}`;
+                          const isClassActive =
+                            pathname === classHref ||
+                            pathname.startsWith(`${classHref}/`);
+
+                          return (
+                            <Link
+                              key={classItem.id}
+                              href={classHref}
+                              className={`flex min-h-9 items-center rounded-xl px-3 text-sm transition-colors duration-200 ${
+                                isClassActive
+                                  ? "bg-(--surface-main-soft) text-(--text-main)"
+                                  : "text-(--text-muted) hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+                              }`}
+                            >
+                              <span className='truncate'>{className}</span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </nav>
+          </div>
+
+          <div className='mt-3 space-y-3 pb-1'>
             <ThemeTogglePill placement='inline' />
             <SidebarProfile name='Tan Yu' onSignOut={signOut} />
           </div>
@@ -178,33 +254,65 @@ export function AppShell({ children }: AppShellProps) {
               </button>
             </div>
 
-            <div className='flex min-h-0 flex-1 flex-col overflow-y-auto pt-4'>
-              <nav className='space-y-2'>
-                {sidebarItems.map((item) => {
-                  const isActive = isItemActive(item);
-                  const Icon = item.icon;
+            <div className='flex min-h-0 flex-1 flex-col pt-4'>
+              <div className='min-h-0 flex-1 overflow-y-auto pb-4 pr-1'>
+                <nav className='space-y-2'>
+                  {sidebarItems.map((item) => {
+                    const isActive = isItemActive(item);
+                    const Icon = item.icon;
+                    const isClassesItem = item.href === "/app/classes";
 
-                  return (
-                    <Link
-                      key={item.label}
-                      href={item.href}
-                      onClick={() => setMobileMenuOpen(false)}
-                      className={`group flex h-11 w-full items-center gap-3 rounded-2xl px-3 transition-colors duration-200 ${
-                        isActive
-                          ? "bg-(--surface-main-soft) text-(--text-main)"
-                          : "text-(--text-muted) hover:bg-(--surface-main-faint) hover:text-(--text-main)"
-                      }`}
-                    >
-                      <Icon className='h-5 w-5 shrink-0' aria-hidden='true' />
-                      <span className='whitespace-nowrap text-sm font-semibold'>
-                        {item.label}
-                      </span>
-                    </Link>
-                  );
-                })}
-              </nav>
+                    return (
+                      <div key={item.label}>
+                        <Link
+                          href={item.href}
+                          onClick={() => setMobileMenuOpen(false)}
+                          className={`group flex h-11 w-full items-center gap-3 rounded-2xl px-3 transition-colors duration-200 ${
+                            isActive
+                              ? "bg-(--surface-main-soft) text-(--text-main)"
+                              : "text-(--text-muted) hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+                          }`}
+                        >
+                          <Icon className='h-5 w-5 shrink-0' aria-hidden='true' />
+                          <span className='whitespace-nowrap text-sm font-semibold'>
+                            {item.label}
+                          </span>
+                        </Link>
 
-              <div className='mt-auto space-y-3 pt-6'>
+                        {isClassesItem && sortedClasses.length > 0 ? (
+                          <div className='mt-2 space-y-1 pl-4'>
+                            {sortedClasses.map((classItem) => {
+                              const className =
+                                classItem.name?.trim() || "Untitled class";
+                              const classHref = `/app/classes/${classItem.id}`;
+                              const isClassActive =
+                                pathname === classHref ||
+                                pathname.startsWith(`${classHref}/`);
+
+                              return (
+                                <Link
+                                  key={classItem.id}
+                                  href={classHref}
+                                  onClick={() => setMobileMenuOpen(false)}
+                                  className={`flex min-h-9 items-center rounded-xl px-3 text-sm transition-colors duration-200 ${
+                                    isClassActive
+                                      ? "bg-(--surface-main-soft) text-(--text-main)"
+                                      : "text-(--text-muted) hover:bg-(--surface-main-faint) hover:text-(--text-main)"
+                                  }`}
+                                >
+                                  <span className='truncate'>{className}</span>
+                                </Link>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </nav>
+              </div>
+
+              <div className='space-y-3 pt-3'>
                 <ThemeTogglePill placement='inline' />
                 <SidebarProfile name='Tan Yu' onSignOut={signOut} />
               </div>

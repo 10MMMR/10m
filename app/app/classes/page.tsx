@@ -260,7 +260,7 @@ export default function ClassesPage() {
             {classes.map((classItem) => (
               <Link
                 className='organic-card block cursor-pointer rounded-[1.5rem] p-5 transition-all duration-200 hover:-translate-y-px hover:border-(--border-strong) hover:shadow-(--shadow-soft)'
-                href={`/editor/class/${encodeURIComponent(classItem.id)}`}
+                href={`/app/classes/${encodeURIComponent(classItem.id)}`}
                 key={classItem.id}
               >
                 <h2 className='text-lg font-semibold text-(--text-main)'>

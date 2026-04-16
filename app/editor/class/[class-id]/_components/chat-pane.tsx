@@ -83,7 +83,7 @@ export function ChatPane({
 
       <div
         ref={messageListRef}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-5 pb-40"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-5 pb-56"
       >
         {messages.length === 0 ? (
           <div className="flex min-h-full items-center justify-center">
@@ -132,57 +132,66 @@ export function ChatPane({
 
       <div
         className="pointer-events-none absolute right-0 bottom-0 left-0 z-10"
-        style={{ backgroundColor: "var(--surface-base)", height: "84px" }}
+        style={{ backgroundColor: "var(--surface-base)", height: "132px" }}
         aria-hidden="true"
       />
 
       <div className="absolute right-4 bottom-4 left-4 z-20">
         <form
-          className="flex items-center gap-2.5 rounded-3xl border border-(--border-strong) bg-(--surface-input) p-2.5 shadow-lg backdrop-blur-lg"
+          className="flex flex-col gap-2 rounded-3xl border border-(--border-strong) bg-(--surface-input) p-2.5 shadow-lg backdrop-blur-lg"
           onSubmit={handleSubmit}
         >
-          <button
-            className="grid h-11 w-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
-            type="button"
-            aria-label="Attach file"
-          >
-            <PaperClipIcon className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <input
-            className="h-11 min-w-0 flex-1 border-0 bg-transparent text-(--text-main) outline-none"
-            placeholder={disabled ? disabledMessage : "Ask a question..."}
-            type="text"
-            value={inputValue}
-            onChange={handleInputChange}
-            disabled={disabled || isStreaming}
-          />
-          <button
-            className="grid h-11 w-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
-            type="button"
-            aria-label="Use microphone"
-          >
-            <MicrophoneIcon className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            className="grid h-11 w-11 place-items-center rounded-full border border-(--border-strong) bg-(--main) text-(--text-contrast) shadow-(--shadow-accent) transition-all duration-200 hover:-translate-y-0.5 hover:shadow-(--shadow-accent-strong)"
-            type="submit"
-            aria-label="Send message"
-            disabled={disabled || isStreaming}
-          >
-            <ArrowRightIcon className="h-5 w-5" aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-2.5">
+            <button
+              className="grid h-11 w-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
+              type="button"
+              aria-label="Attach file"
+            >
+              <PaperClipIcon className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <input
+              className="chat-input-no-focus h-11 min-w-0 flex-1 border-0 bg-transparent text-(--text-main) outline-none"
+              placeholder={disabled ? disabledMessage : "Ask a question..."}
+              type="text"
+              value={inputValue}
+              onChange={handleInputChange}
+              disabled={disabled || isStreaming}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-4 text-[11px] text-(--text-muted)">
+              <button className="border-0 bg-transparent text-inherit" type="button">
+                Plugins
+              </button>
+              <span>AI can make mistakes.</span>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <button
+                className="grid h-11 w-11 place-items-center rounded-xl border border-(--border-soft) bg-(--surface-panel-strong) text-(--text-muted) transition-all duration-200 hover:-translate-y-0.5"
+                type="button"
+                aria-label="Use microphone"
+                disabled={disabled || isStreaming}
+              >
+                <MicrophoneIcon className="h-5 w-5" aria-hidden="true" />
+              </button>
+              <button
+                className="grid h-11 w-11 place-items-center rounded-full border border-(--border-strong) bg-(--main) text-(--text-contrast) shadow-(--shadow-accent) transition-all duration-200 hover:-translate-y-0.5 hover:shadow-(--shadow-accent-strong)"
+                type="submit"
+                aria-label="Send message"
+                disabled={disabled || isStreaming}
+              >
+                <ArrowRightIcon className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
         </form>
         {disabled ? (
           <p className="px-2 pt-2 text-center text-[11px] text-(--text-muted)">
             {disabledMessage}
           </p>
         ) : null}
-        <div className="flex items-center justify-center gap-4 pt-2.5 text-[11px] text-(--text-muted)">
-          <button className="border-0 bg-transparent text-inherit" type="button">
-            Plugins
-          </button>
-          <span>AI can make mistakes.</span>
-        </div>
       </div>
     </aside>
   );

@@ -372,7 +372,7 @@ function isValidMark(
     const attrs = value.attrs;
     const keys = Object.keys(attrs);
 
-    if (keys.some((key) => key !== "fontSize" && key !== "fontFamily")) {
+    if (keys.some((key) => key !== "fontSize" && key !== "fontFamily" && key !== "color")) {
       return false;
     }
 
@@ -392,6 +392,37 @@ function isValidMark(
       }
 
       if (attrs.fontFamily.trim().length === 0) {
+        return false;
+      }
+    }
+
+    if (!isAbsent(attrs.color)) {
+      if (typeof attrs.color !== "string") {
+        return false;
+      }
+
+      if (attrs.color.trim().length === 0) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  if (value.type === "highlight") {
+    const attrs = value.attrs;
+    const keys = Object.keys(attrs);
+
+    if (keys.some((key) => key !== "color")) {
+      return false;
+    }
+
+    if (!isAbsent(attrs.color)) {
+      if (typeof attrs.color !== "string") {
+        return false;
+      }
+
+      if (attrs.color.trim().length === 0) {
         return false;
       }
     }

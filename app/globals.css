@@ -351,8 +351,21 @@ input:focus-visible {
   padding-left: 1.5rem;
 }
 
+.chat-markdown ul {
+  list-style: disc outside;
+}
+
+.chat-markdown ol {
+  list-style: decimal outside;
+}
+
 .chat-markdown li + li {
   margin-top: 0.35rem;
+}
+
+.chat-input-no-focus:focus-visible {
+  outline: none;
+  outline-offset: 0;
 }
 
 .chat-markdown a {
@@ -363,7 +376,7 @@ input:focus-visible {
 }
 
 .chat-markdown strong {
-  color: var(--main);
+  color: var(--secondary-strong);
   font-weight: 700;
 }
 

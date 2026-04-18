@@ -161,44 +161,44 @@ export function WaitlistShowcase() {
 
       <section className="relative mx-auto w-full max-w-7xl">
         <div className="relative">
-          <div className="grid items-center gap-10 px-2 py-8 sm:px-4 sm:py-10 lg:grid-cols-[0.65fr_1.35fr] lg:items-center lg:gap-24">
+          <div className="grid items-center gap-8 px-2 py-8 sm:gap-10 sm:px-4 sm:py-10 lg:grid-cols-[0.65fr_1.35fr] lg:items-center lg:gap-24">
             <div className="text-left lg:flex lg:h-full lg:flex-col lg:justify-center lg:gap-10">
-              <div className="space-y-4">
+              <div className="space-y-5 sm:space-y-4">
                 <div className="flex items-center gap-4">
-                  <div className="grid h-20 w-20 place-items-center rounded-3xl border border-(--border-soft) bg-(--surface-panel-strong) shadow-(--shadow-soft)">
+                  <div className="grid h-20 w-20 place-items-center">
                     <Image
                       src="/ducki_app.png"
                       alt="Ducky app icon"
                       width={56}
                       height={56}
-                      className="h-14 w-14 rounded-2xl object-cover"
+                      className="h-16 w-16 rounded-2xl object-cover"
                     />
                   </div>
-                  <p className="display-font text-3xl font-bold text-(--text-main) sm:text-4xl">Sprout</p>
+                  <p className="display-font text-3xl font-bold text-(--main) sm:text-4xl">Sprout</p>
                 </div>
 
-                <h1 className="display-font max-w-3xl text-4xl font-bold leading-tight text-(--text-main) sm:text-6xl">
+                <h1 className="display-font max-w-3xl text-3xl font-bold leading-tight tracking-tighter text-(--text-main) sm:text-6xl">
                   {activeVariant.title}
                 </h1>
-                <p className="max-w-2xl text-lg leading-relaxed text-(--text-body)">
+                <p className="max-w-2xl text-lg font-medium leading-relaxed text-(--text-body) sm:text-xl">
                   {activeVariant.subtitle}
                 </p>
               </div>
 
               {isSubmitted ? (
-                <p className="max-w-2xl text-lg font-semibold text-(--text-main)">
+                <p className="mt-6 max-w-2xl text-lg font-semibold text-(--text-main)">
                   {SUCCESS_MESSAGE}
                 </p>
               ) : (
                 <form
                   data-waitlist-form
-                  className="w-full max-w-2xl"
+                  className="mt-6 w-full max-w-2xl"
                   noValidate
                   action={waitlistEndpoint}
                   method="post"
                   onSubmit={handleSubmit}
                 >
-                  <div className="flex flex-col gap-3 rounded-full border border-(--border-strong) bg-(--surface-input) p-2 sm:flex-row sm:items-center">
+                  <div className="flex flex-col gap-2 rounded-3xl border border-(--border-strong) bg-(--surface-input) p-2 sm:flex-row sm:items-center sm:rounded-full">
                     <input
                       aria-invalid={Boolean(error)}
                       aria-label="Email address"
@@ -224,12 +224,6 @@ export function WaitlistShowcase() {
                 </form>
               )}
 
-              <span
-                aria-label="Instagram"
-                className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-(--border-strong) bg-(--surface-panel-strong) text-(--main)"
-              >
-                <InstagramIcon />
-              </span>
             </div>
 
             <div className="relative flex items-center justify-center lg:h-full lg:justify-end">
@@ -287,6 +281,14 @@ export function WaitlistShowcase() {
                 />
               </div>
             </div>
+          </div>
+          <div className="mt-6 flex justify-center">
+            <span
+              aria-label="Instagram"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-(--border-strong) bg-(--surface-panel-strong) text-(--main)"
+            >
+              <InstagramIcon />
+            </span>
           </div>
         </div>
       </section>

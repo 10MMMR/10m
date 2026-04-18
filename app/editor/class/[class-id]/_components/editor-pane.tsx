@@ -7,7 +7,7 @@ import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
 import TableRow from "@tiptap/extension-table-row";
 import Highlight from "@tiptap/extension-highlight";
-import { FontFamily, FontSize, TextStyle } from "@tiptap/extension-text-style";
+import { Color, FontFamily, FontSize, TextStyle } from "@tiptap/extension-text-style";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
@@ -156,6 +156,11 @@ type EquationPaletteGroup = {
   items: EquationPaletteItem[];
 };
 
+type EditorColorOption = {
+  label: string;
+  value: string;
+};
+
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 40;
 const DEFAULT_FONT_SIZE = 17;
@@ -178,6 +183,26 @@ const LINE_HEIGHT_OPTIONS: ReadonlyArray<{
   { label: "1.0", value: "1.0" },
   { label: "1.5", value: "1.5" },
   { label: "2.0", value: "2.0" },
+];
+const TEXT_COLOR_OPTIONS: ReadonlyArray<EditorColorOption> = [
+  { label: "Main", value: "var(--text-main)" },
+  { label: "Body", value: "var(--text-body)" },
+  { label: "Muted", value: "var(--text-muted)" },
+  { label: "Accent", value: "var(--text-secondary)" },
+  { label: "Primary", value: "var(--main)" },
+  { label: "Primary Deep", value: "var(--main-deep)" },
+  { label: "Secondary", value: "var(--secondary)" },
+  { label: "Secondary Strong", value: "var(--secondary-strong)" },
+];
+const HIGHLIGHT_COLOR_OPTIONS: ReadonlyArray<EditorColorOption> = [
+  { label: "Primary Soft", value: "var(--surface-main-soft)" },
+  { label: "Primary Faint", value: "var(--surface-main-faint)" },
+  { label: "Primary Extra Faint", value: "var(--surface-main-xfaint)" },
+  { label: "Accent Soft", value: "var(--surface-accent-soft)" },
+  { label: "User Soft", value: "var(--surface-user-soft)" },
+  { label: "Selection Inactive", value: "var(--surface-selection-inactive)" },
+  { label: "Table Header", value: "var(--surface-table-head)" },
+  { label: "Panel Soft", value: "var(--surface-panel-soft)" },
 ];
 type EditorFontValue =
   | "geist"
@@ -476,6 +501,7 @@ export function EditorPane({
   const [isAlignMenuOpen, setIsAlignMenuOpen] = useState(false);
   const [isLineSpacingMenuOpen, setIsLineSpacingMenuOpen] = useState(false);
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
+  const [isColorMenuOpen, setIsColorMenuOpen] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
   const [isOverflowTableMenuOpen, setIsOverflowTableMenuOpen] = useState(false);
   const [isOverflowAlignMenuOpen, setIsOverflowAlignMenuOpen] = useState(false);
@@ -488,6 +514,8 @@ export function EditorPane({
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
   const [isImageDropActive, setIsImageDropActive] = useState(false);
+  const [lastSelectedHighlightColor, setLastSelectedHighlightColor] =
+    useState<string | null>(null);
   const [equationPalettePosition, setEquationPalettePosition] = useState({
     x: 140,
     y: 180,
@@ -504,6 +532,7 @@ export function EditorPane({
   const shouldUseOverflowScroll =
     !isDesktopToolbarMenuOpen &&
     !isFontMenuOpen &&
+    !isColorMenuOpen &&
     !isOverflowMenuOpen &&
     !isOverflowTableMenuOpen &&
     !isOverflowAlignMenuOpen &&
@@ -602,8 +631,9 @@ export function EditorPane({
   const editor = useEditor({
     extensions: [
       StarterKit,
-      Highlight.configure({ multicolor: false }),
+      Highlight.configure({ multicolor: true }),
       TextStyle,
+      Color,
       FontFamily,
       FontSize,
       inlineImageExtension,
@@ -737,6 +767,10 @@ export function EditorPane({
         setIsFontMenuOpen(false);
       }
 
+      if (!target?.closest("[data-editor-color-menu]")) {
+        setIsColorMenuOpen(false);
+      }
+
     };
 
     document.addEventListener("click", handleDocumentClick);
@@ -799,6 +833,7 @@ export function EditorPane({
       return;
     }
 
+    setIsColorMenuOpen(false);
     setIsImageModalOpen(false);
     setIsUploadingImage(false);
     setImageUploadError(null);
@@ -992,6 +1027,8 @@ export function EditorPane({
           ? getBlockAttribute(editor, "lineHeight") ?? DEFAULT_LINE_HEIGHT
           : DEFAULT_LINE_HEIGHT,
         fontFamily: editor ? String(editor.getAttributes("textStyle").fontFamily ?? "") : "",
+        textColor: editor ? String(editor.getAttributes("textStyle").color ?? "") : "",
+        highlightColor: editor ? String(editor.getAttributes("highlight").color ?? "") : "",
         hasSelection: editor ? !editor.state.selection.empty : false,
         fontSize: equationIsActive
           ? equationFontSize || DEFAULT_FONT_SIZE
@@ -1003,6 +1040,16 @@ export function EditorPane({
     },
     [editor, editorRevision],
   );
+
+  useEffect(() => {
+    const currentHighlightColor = toolbarState.highlightColor.trim();
+
+    if (currentHighlightColor.length === 0) {
+      return;
+    }
+
+    setLastSelectedHighlightColor(currentHighlightColor);
+  }, [toolbarState.highlightColor]);
 
   const toolbarButtonClass = ({
     active = false,
@@ -1040,6 +1087,18 @@ export function EditorPane({
         editor.commands.updateAttributes("equationBlock", {
           highlighted: !toolbarState.highlight,
         });
+        return;
+      }
+
+      if (toolbarState.highlight) {
+        editor.chain().focus().unsetHighlight().run();
+        return;
+      }
+
+      const nextHighlightColor = lastSelectedHighlightColor?.trim();
+
+      if (nextHighlightColor && nextHighlightColor.length > 0) {
+        editor.chain().focus().setHighlight({ color: nextHighlightColor }).run();
         return;
       }
 
@@ -1263,6 +1322,10 @@ export function EditorPane({
     setIsFontMenuOpen(false);
   };
 
+  const closeDesktopColorMenu = () => {
+    setIsColorMenuOpen(false);
+  };
+
   const closeOverflowMenus = () => {
     setIsOverflowMenuOpen(false);
     setIsOverflowTableMenuOpen(false);
@@ -1379,6 +1442,7 @@ export function EditorPane({
     setIsAlignMenuOpen(false);
     setIsLineSpacingMenuOpen(false);
     setIsFontMenuOpen(false);
+    setIsColorMenuOpen(false);
     setter((current) => !current);
   };
 
@@ -1490,6 +1554,135 @@ export function EditorPane({
       ))}
     </div>
   );
+
+  const applyTextColor = (
+    event: MouseEvent<HTMLButtonElement>,
+    color: string | null,
+    closeMenu: () => void,
+  ) => {
+    event.preventDefault();
+
+    if (!editor || !canEdit) {
+      return;
+    }
+
+    if (!color) {
+      editor.chain().focus().unsetColor().run();
+      closeMenu();
+      return;
+    }
+
+    editor.chain().focus().setColor(color).run();
+    closeMenu();
+  };
+
+  const applyHighlightColor = (
+    event: MouseEvent<HTMLButtonElement>,
+    color: string | null,
+    closeMenu: () => void,
+  ) => {
+    event.preventDefault();
+
+    if (!editor || !canEdit || editor.isActive("equationBlock")) {
+      return;
+    }
+
+    if (!color) {
+      editor
+        .chain()
+        .focus()
+        .unsetHighlight()
+        .toggleHighlight()
+        .run();
+      setLastSelectedHighlightColor(null);
+      closeMenu();
+      return;
+    }
+
+    editor.chain().focus().setHighlight({ color }).run();
+    setLastSelectedHighlightColor(color);
+    closeMenu();
+  };
+
+  const colorMenu = (closeMenu: () => void) => {
+    const activeTextColor = toolbarState.textColor.trim();
+    const activeHighlightColor = toolbarState.highlightColor.trim();
+
+    return (
+      <div className="w-64 rounded-2xl border border-(--border-soft) bg-(--surface-base) p-3 shadow-(--shadow-floating)">
+        <p className="m-0 text-xs font-semibold tracking-[0.08em] text-(--text-muted) uppercase">
+          Text color
+        </p>
+        <div className="mt-2 grid grid-cols-4 gap-2">
+          {TEXT_COLOR_OPTIONS.map((option) => (
+            <button
+              key={`text-${option.value}`}
+              aria-label={`Set text color to ${option.label}`}
+              aria-pressed={activeTextColor === option.value}
+              className={`h-8 w-8 rounded-lg border transition-colors ${
+                activeTextColor === option.value
+                  ? "border-(--main) ring-2 ring-(--main)"
+                  : "border-(--border-soft) hover:border-(--border-strong)"
+              }`}
+              disabled={!canEdit}
+              onMouseDown={(event) => applyTextColor(event, option.value, closeMenu)}
+              style={{ backgroundColor: option.value }}
+              type="button"
+            >
+              <span className="sr-only">{option.label}</span>
+            </button>
+          ))}
+        </div>
+        <button
+          aria-label="Clear text color"
+          className={tableControlClass({
+            active: activeTextColor.length === 0,
+            disabled: !canEdit,
+          })}
+          disabled={!canEdit}
+          onMouseDown={(event) => applyTextColor(event, null, closeMenu)}
+          type="button"
+        >
+          Default text color
+        </button>
+        <p className="mt-3 mb-0 text-xs font-semibold tracking-[0.08em] text-(--text-muted) uppercase">
+          Highlight color
+        </p>
+        <div className="mt-2 grid grid-cols-4 gap-2">
+          {HIGHLIGHT_COLOR_OPTIONS.map((option) => (
+            <button
+              key={`highlight-${option.value}`}
+              aria-label={`Set highlight color to ${option.label}`}
+              aria-pressed={activeHighlightColor === option.value}
+              className={`h-8 w-8 rounded-lg border transition-colors ${
+                activeHighlightColor === option.value
+                  ? "border-(--main) ring-2 ring-(--main)"
+                  : "border-(--border-soft) hover:border-(--border-strong)"
+              }`}
+              disabled={!canEdit || editor?.isActive("equationBlock")}
+              onMouseDown={(event) => applyHighlightColor(event, option.value, closeMenu)}
+              style={{ backgroundColor: option.value }}
+              type="button"
+            >
+              <span className="sr-only">{option.label}</span>
+            </button>
+          ))}
+        </div>
+        <button
+          aria-label="Use default highlight color"
+          className={tableControlClass({
+            active: toolbarState.highlight && activeHighlightColor.length === 0,
+            disabled: !canEdit || editor?.isActive("equationBlock"),
+          })}
+          disabled={!canEdit || editor?.isActive("equationBlock")}
+          onMouseDown={(event) => applyHighlightColor(event, null, closeMenu)}
+          type="button"
+        >
+          Default highlight color
+        </button>
+      </div>
+    );
+  };
 
   const tableMenu = (closeMenu: () => void) => (
     <div className="w-52 rounded-2xl border border-(--border-soft) bg-(--surface-base) p-1.5 shadow-(--shadow-floating)">
@@ -1838,15 +2031,27 @@ export function EditorPane({
             >
               <UnderlineIcon className="h-5 w-5" aria-hidden="true" />
             </button>
-            <button
-              className={`grid ${toolbarButtonClass({ disabled: true })}`}
-              type="button"
-              aria-label="Text color"
-              aria-disabled="true"
-              disabled
-            >
-              <SwatchIcon className="h-5 w-5" aria-hidden="true" />
-            </button>
+            <div className="relative" data-editor-color-menu>
+              <button
+                className={`grid ${toolbarButtonClass({
+                  active: isColorMenuOpen || toolbarState.textColor.trim().length > 0,
+                  disabled: !canEdit,
+                })}`}
+                type="button"
+                aria-label="Text color"
+                aria-expanded={isColorMenuOpen}
+                aria-disabled={!canEdit}
+                disabled={!canEdit}
+                onClick={() => toggleDesktopMenu(setIsColorMenuOpen)}
+              >
+                <SwatchIcon className="h-5 w-5" aria-hidden="true" />
+              </button>
+              {isColorMenuOpen ? (
+                <div className="absolute top-[calc(100%+8px)] right-0 z-10">
+                  {colorMenu(closeDesktopColorMenu)}
+                </div>
+              ) : null}
+            </div>
             <button
               className={`grid ${toolbarButtonClass({
                 active: toolbarState.highlight,
@@ -2281,7 +2486,7 @@ export function EditorPane({
         className="relative z-10 flex-1 overflow-auto overscroll-auto"
         style={{ WebkitOverflowScrolling: "touch" }}
       >
-        <div className={isPdfView ? "h-full" : "min-h-full pt-7 pb-10 md:pt-28"}>
+        <div className={isPdfView ? "h-full" : "min-h-full pt-7 pb-10 md:pt-28 bg-(--surface-editor-card)"}>
           <div
             className={`min-h-full w-full bg-(--surface-editor-card) backdrop-blur-xl ${
               isPdfView ? "h-full" : ""
@@ -2337,7 +2542,7 @@ export function EditorPane({
                   </div>
 
                   <div
-                    className={`${styles.noteBodyEditor} min-h-[420px] rounded-[22px] bg-(--surface-base)`}
+                    className={`${styles.noteBodyEditor} min-h-[420px] rounded-[22px] bg-(--surface-editor-card) `}
                   >
                     <EditorContent editor={editor} />
                   </div>

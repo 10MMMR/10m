@@ -39,4 +39,27 @@ Interpret creatively and make unexpected choices that feel genuinely designed fo
 
 **IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well.
 
+## Mobile Spacing and Validation Loop
+
+When polishing mobile screens, apply concrete spacing and tap-target rules before visual experimentation:
+- Use an 8pt/8dp spacing rhythm for most layout gaps. Favor increments like 8, 12, 16, 24, 32.
+- Keep primary horizontal gutters close to 16dp/16pt on phones unless a clear visual concept requires deviation.
+- Keep small element adjustments on 4pt steps when needed (icons, tight internal alignment).
+- Ensure interactive controls are comfortably tappable; target at least ~48dp on Android and avoid tiny hit regions.
+- Preserve hierarchy with spacing blocks: brand row -> headline -> support copy -> primary action form -> secondary media.
+- On mobile conversion surfaces, prefer top-aligned hero content over full vertical centering when centering creates awkward dead space.
+
+Use an iterative screenshot loop for final polish:
+1. Capture current mobile state.
+2. List concrete issues with measurable language (for example, "subtitle too heavy", "form too close to heading", "icon hit area too small").
+3. Patch only the smallest classes or tokens needed.
+4. Re-capture and compare.
+5. Repeat until spacing rhythm, hierarchy, and tap comfort all read cleanly.
+
+Useful references for spacing and touch ergonomics:
+- Android grids and units (8dp grid): https://developer.android.com/design/ui/mobile/guides/layout-and-content/grids-and-units?hl=en
+- Android layout margin notes (8dp factors): https://developer.android.com/develop/ui/views/layout/constraint-layout
+- Android minimum touch target guidance (48dp): https://developer.android.com/codelabs/basic-android-kotlin-compose-test-accessibility
+- Apple interaction hit-region guidance: https://developer.apple.com/design/human-interface-guidelines/pointing-devices
+
 Remember: Codex is capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision.

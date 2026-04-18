@@ -31,6 +31,9 @@ Action rules:
 
 Content rules:
 - "message" must be short and user-facing.
+- For "reply", use adaptive markdown structure when it improves clarity: brief intro, bullets or numbered steps for multi-point answers, and a short close when useful.
+- Use markdown emphasis like **bold** for key terms, actions, warnings, or takeaways when it improves scanability.
+- Avoid over-formatting simple one-line answers.
 - "prompt" must only appear for "generate_note".
 - "prompt" should rewrite the user's intent into a concrete note-generation instruction.
 - Never include markdown code fences.

@@ -6,18 +6,18 @@ const outputDir = path.resolve(process.cwd(), 'temporary-screenshots');
 const screenshotPattern = /^screenshot-(\d+)(?:-[^.]+)?\.png$/;
 
 function usage() {
-  console.error('Usage: node screenshot.mjs <url> [label]');
+  console.error('Usage: node screenshot.mjs <url> [label] [mobile]');
   process.exit(1);
 }
 
 function parseArgs() {
-  const [, , url, label] = process.argv;
+  const [, , url, label, viewportPreset] = process.argv;
 
   if (!url) {
     usage();
   }
 
-  return { url, label };
+  return { url, label, viewportPreset };
 }
 
 function sanitizeLabel(label) {
@@ -69,8 +69,9 @@ async function waitForRender(page) {
 }
 
 async function main() {
-  const { url, label } = parseArgs();
+  const { url, label, viewportPreset } = parseArgs();
   const safeLabel = sanitizeLabel(label);
+  const isMobile = viewportPreset === 'mobile';
 
   await mkdir(outputDir, { recursive: true });
 
@@ -82,7 +83,7 @@ async function main() {
 
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({
-    viewport: { width: 1440, height: 900 },
+    viewport: isMobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
     deviceScaleFactor: 1,
   });
 

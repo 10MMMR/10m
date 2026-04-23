@@ -1,15 +1,15 @@
 "use client";
 
 import {
-  AcademicCapIcon,
   ChatBubbleLeftEllipsisIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   HomeIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { useSyncExternalStore, type ComponentType, type SVGProps } from "react";
 
-type PopupSection = "home" | "classes" | "chats";
+type PopupSection = "home" | "chats";
 
 type PopupTab = {
   id: PopupSection;
@@ -27,27 +27,72 @@ const popupTabs: PopupTab[] = [
     icon: HomeIcon,
   },
   {
-    id: "classes",
-    label: "Classes",
-    icon: AcademicCapIcon,
-  },
-  {
     id: "chats",
     label: "Chats",
     icon: ChatBubbleLeftEllipsisIcon,
   },
 ];
 
+const recentChatPlaceholders = [
+  {
+    id: "chat-1",
+    title: "Midterm Study Plan",
+    lastActivity: "April 20, 2026",
+  },
+  {
+    id: "chat-2",
+    title: "Biology Notes Review",
+    lastActivity: "April 18, 2026",
+  },
+  {
+    id: "chat-3",
+    title: "Essay Outline Brainstorm",
+    lastActivity: "April 16, 2026",
+  },
+] as const;
+
 function HomeContent() {
   return (
-    <div className="rounded-2xl border border-(--border-soft) bg-(--surface-main-xfaint) px-4 py-3 text-sm text-(--text-main)">
-      Home
+    <div className="flex flex-col gap-5 text-(--text-main)">
+      <section className="rounded-2xl border border-(--border-soft) bg-(--surface-main-xfaint) p-4">
+        <h3 className="text-sm font-semibold">Recent chats</h3>
+        <ul className="mt-3 space-y-2.5">
+          {recentChatPlaceholders.map((chat) => (
+            <li key={chat.id}>
+              <button
+                className="group flex w-full cursor-pointer items-center justify-between rounded-xl border border-(--border-soft) bg-(--surface-base) px-3 py-2.5 text-left transition-colors duration-200 hover:bg-(--surface-main-faint)"
+                onClick={() => undefined}
+                type="button"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold leading-tight text-(--text-main)">{chat.title}</p>
+                  <p className="mt-1 text-xs text-(--text-muted)">Last activity: {chat.lastActivity}</p>
+                </div>
+                <ChevronRightIcon
+                  aria-hidden="true"
+                  className="ml-3 h-4 w-4 shrink-0 text-(--text-muted) transition-colors duration-200 group-hover:text-(--text-main)"
+                />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="rounded-2xl border border-(--border-soft) bg-(--surface-main-xfaint) p-4">
+        <h3 className="text-sm font-semibold">Start a new chat</h3>
+        <p className="mt-1 text-xs text-(--text-muted)">
+          Open a fresh conversation for new questions.
+        </p>
+        <button
+          className="mt-3 inline-flex w-full items-center justify-center rounded-xl border border-(--border-soft) bg-(--surface-base) px-3 py-2.5 text-sm font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)"
+          onClick={() => undefined}
+          type="button"
+        >
+          Start a new chat
+        </button>
+      </section>
     </div>
   );
-}
-
-function ClassesContent() {
-  return <p className="text-sm font-medium text-(--text-main)">Class</p>;
 }
 
 function ChatsContent() {
@@ -55,10 +100,6 @@ function ChatsContent() {
 }
 
 function PopupContent({ section }: { section: PopupSection }) {
-  if (section === "classes") {
-    return <ClassesContent />;
-  }
-
   if (section === "chats") {
     return <ChatsContent />;
   }
@@ -85,7 +126,7 @@ function readPopupSectionState(): PopupSection {
 
   try {
     const value = window.sessionStorage.getItem(POPUP_SECTION_KEY);
-    if (value === "home" || value === "classes" || value === "chats") {
+    if (value === "home" || value === "chats") {
       return value;
     }
   } catch {
@@ -157,8 +198,8 @@ export function ChatPopupToggle() {
   return (
     <>
       {isOpen ? (
-        <section className="chat-popup-panel chat-popup-panel-enter fixed inset-0 z-50 flex flex-col bg-(--surface-base) md:inset-auto md:right-6 md:bottom-24 md:rounded-3xl md:border md:border-(--border-soft) md:bg-(--surface-panel-strong) md:shadow-(--shadow-floating)">
-          <header className="border-b border-(--border-soft) p-4">
+        <section className="chat-popup-panel chat-popup-panel-enter fixed inset-0 z-50 flex flex-col bg-(--surface-base) md:inset-auto md:right-6 md:bottom-24 md:rounded-3xl md:border md:border-(--border-soft) md:bg-(--surface-base) md:shadow-(--shadow-floating)">
+          <header className="border-b border-(--border-soft) p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold text-(--text-muted)">Hi Tan</p>
@@ -177,12 +218,12 @@ export function ChatPopupToggle() {
             </div>
           </header>
 
-          <div className="flex-1 overflow-y-auto p-4">
+          <div className="flex-1 overflow-y-auto p-5">
             <PopupContent section={activeSection} />
           </div>
 
-          <nav className="border-t border-(--border-soft) p-2">
-            <ul className="grid grid-cols-3 gap-2">
+          <nav className="border-t border-(--border-soft) p-3">
+            <ul className="grid grid-cols-2 gap-2">
               {popupTabs.map((tab) => {
                 const isActive = activeSection === tab.id;
                 const Icon = tab.icon;

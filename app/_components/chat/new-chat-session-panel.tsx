@@ -7,6 +7,8 @@ import {
 } from "@heroicons/react/24/outline";
 import type { User } from "@supabase/supabase-js";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useAuth } from "@/app/_global/authentication/auth-context";
 import { supabase } from "@/app/_global/authentication/supabaseClient";
 
@@ -70,6 +72,78 @@ type PopupAssistantResponse = {
   assistant?: ChatMessage;
   userMessage?: ChatMessage;
 };
+
+function renderPlainUserMessage(content: string) {
+  return <p className="whitespace-pre-wrap break-words">{content}</p>;
+}
+
+function renderAssistantMarkdown(content: string) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: ({ children, href }) => (
+          <a
+            className="font-medium text-(--main) underline underline-offset-2 transition-colors duration-200 hover:text-(--text-secondary)"
+            href={href}
+            rel="noreferrer"
+            target="_blank"
+          >
+            {children}
+          </a>
+        ),
+        code: ({ children, className, ...props }) => {
+          if ("inline" in props && props.inline) {
+            return (
+              <code className="rounded bg-(--surface-main-faint) px-1.5 py-0.5 font-mono text-[0.92em]">
+                {children}
+              </code>
+            );
+          }
+
+          return (
+            <code className={`block min-w-fit font-mono text-[0.92em] leading-6 ${className ?? ""}`.trim()}>
+              {children}
+            </code>
+          );
+        },
+        li: ({ children }) => <li className="whitespace-pre-wrap">{children}</li>,
+        ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5">{children}</ol>,
+        p: ({ children }) => <p className="whitespace-pre-wrap">{children}</p>,
+        pre: ({ children }) => (
+          <pre className="my-2 overflow-x-auto rounded-xl border border-(--border-soft) bg-(--surface-main-faint) p-3">
+            {children}
+          </pre>
+        ),
+        ul: ({ children }) => <ul className="list-disc space-y-1 pl-5">{children}</ul>,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
+function MessageBody({
+  content,
+  role,
+}: {
+  content: string;
+  role: ChatMessageRole;
+}) {
+  if (role === "assistant") {
+    return (
+      <div className="space-y-3 break-words">
+        {renderAssistantMarkdown(content)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="break-words">
+      {renderPlainUserMessage(content)}
+    </div>
+  );
+}
 
 export function NewChatSessionPanel({
   classId = null,
@@ -694,7 +768,7 @@ export function NewChatSessionPanel({
         )}
       </div>
 
-      <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+      <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
         {messages.map((message, index) => {
           const isUserMessage = message.role === "user";
           const actorName = isUserMessage ? firstName : "Assistant";
@@ -705,7 +779,7 @@ export function NewChatSessionPanel({
               key={`${message.role}-${message.messageIndex}-${index}`}
               className={`flex ${isUserMessage ? "justify-end" : "justify-start"}`}
             >
-              <div className={`max-w-[85%] ${isUserMessage ? "items-end" : "items-start"} flex flex-col`}>
+              <div className={`max-w-[88%] ${isUserMessage ? "items-end" : "items-start"} flex flex-col`}>
                 <p className="flex items-center gap-2 text-xs font-semibold text-(--text-muted)">
                   <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-(--border-soft) bg-(--surface-base) text-[11px] font-bold text-(--text-main)">
                     {actorIconText}
@@ -713,13 +787,13 @@ export function NewChatSessionPanel({
                   <span>{actorName}</span>
                 </p>
                 <div
-                  className={`mt-1 rounded-2xl border px-3 py-2.5 text-sm leading-6 ${
+                  className={`mt-1 w-full rounded-2xl border px-4 py-3 text-sm leading-6 overflow-hidden ${
                     isUserMessage
                       ? "border-(--border-strong) bg-(--surface-main-soft) text-(--text-main)"
                       : "border-(--border-soft) bg-(--surface-base) text-(--text-main)"
                   }`}
                 >
-                  {message.content}
+                  <MessageBody content={message.content} role={message.role} />
                 </div>
               </div>
             </article>

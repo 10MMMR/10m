@@ -59,8 +59,21 @@ type StoredChatMessage = {
 };
 
 type ClassChunk = {
+  chunkId: string;
   content: string;
+  materialId: string | null;
+  pageEnd: number | null;
+  pageStart: number | null;
+  similarity: number;
 };
+
+type ChatRow = {
+  class_id: string | null;
+  id: string;
+};
+
+const CLASS_CHUNK_MATCH_COUNT = 6;
+const CLASS_CHUNK_SIMILARITY_THRESHOLD = 0.5;
 
 const POPUP_STUDY_ASSISTANT_SYSTEM_PROMPT = [
   "You are an AI study assistant.",
@@ -321,7 +334,7 @@ function toOpenAiConversationInput(messages: StoredChatMessage[]) {
   }));
 }
 
-async function createEmbedding(input: string) {
+async function embedUserQuery(message: string) {
   const apiKey = getOpenAiApiKey();
   const response = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
@@ -330,7 +343,7 @@ async function createEmbedding(input: string) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      input,
+      input: message,
       model: "text-embedding-3-small",
     }),
   });
@@ -414,56 +427,117 @@ function parseEmbeddingValue(value: unknown) {
   return null;
 }
 
-async function retrieveClassChunks({
+function getChunkId(row: Record<string, unknown>) {
+  const value = typeof row.id === "string" && row.id.trim().length > 0
+    ? row.id
+    : row.chunk_id;
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  return "unknown-chunk";
+}
+
+function getMaterialId(row: Record<string, unknown>) {
+  const value = row.material_id;
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+
+  return null;
+}
+
+function getNumericValue(row: Record<string, unknown>, key: string) {
+  const value = row[key];
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function getSimilarityScore(row: Record<string, unknown>) {
+  const similarityKeys = ["similarity", "score", "sim_score", "match_score"];
+
+  for (const key of similarityKeys) {
+    const similarity = getNumericValue(row, key);
+
+    if (similarity !== null) {
+      return similarity;
+    }
+  }
+
+  const distanceKeys = ["distance", "cosine_distance"];
+
+  for (const key of distanceKeys) {
+    const distance = getNumericValue(row, key);
+
+    if (distance !== null) {
+      return 1 - distance;
+    }
+  }
+
+  return null;
+}
+
+function toClassChunk(row: Record<string, unknown>) {
+  return {
+    chunkId: getChunkId(row),
+    content: getChunkContent(row),
+    materialId: getMaterialId(row),
+    pageEnd: getNumericValue(row, "page_end"),
+    pageStart: getNumericValue(row, "page_start"),
+    similarity: getSimilarityScore(row) ?? 0,
+  };
+}
+
+async function matchMaterialChunks({
   classId,
+  matchCount,
+  queryEmbedding,
+  threshold,
   supabase,
-  userMessage,
 }: {
   classId: string;
+  matchCount: number;
+  queryEmbedding: number[];
+  threshold: number;
   supabase: SupabaseClient;
-  userMessage: string;
 }) {
-  const queryEmbedding = await createEmbedding(userMessage);
-
   const rpcCandidates = [
-    {
-      fn: "match_material_chunks",
-      params: {
-        class_id: classId,
-        match_count: 6,
-        query_embedding: queryEmbedding,
-      },
-    },
-    {
-      fn: "match_material_chunks_by_class",
-      params: {
-        class_id: classId,
-        match_count: 6,
-        query_embedding: queryEmbedding,
-      },
-    },
-    {
-      fn: "match_class_material_chunks",
-      params: {
-        class_id: classId,
-        match_count: 6,
-        query_embedding: queryEmbedding,
-      },
-    },
+    "match_material_chunks",
+    "match_material_chunks_by_class",
+    "match_class_material_chunks",
   ];
 
-  for (const candidate of rpcCandidates) {
-    const { data, error } = await supabase.rpc(candidate.fn, candidate.params);
+  for (const fn of rpcCandidates) {
+    const { data, error } = await supabase.rpc(fn, {
+      class_id: classId,
+      match_count: matchCount,
+      query_embedding: queryEmbedding,
+    });
 
     if (error || !Array.isArray(data)) {
       continue;
     }
 
     const chunks = data
-      .map((row) => getChunkContent((row as Record<string, unknown>) ?? {}))
-      .filter((content) => content.length > 0)
-      .slice(0, 6)
-      .map((content) => ({ content }));
+      .map((row) => toClassChunk((row as Record<string, unknown>) ?? {}))
+      .filter((chunk) => chunk.content.length > 0)
+      .filter((chunk) => chunk.similarity >= threshold)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, matchCount);
 
     if (chunks.length > 0) {
       return chunks;
@@ -472,31 +546,93 @@ async function retrieveClassChunks({
 
   const { data, error } = await supabase
     .from("material_chunks")
-    .select("*")
+    .select("id, content, material_id, page_start, page_end, vector")
     .eq("class_id", classId)
-    .limit(40);
+    .limit(120);
 
   if (error || !Array.isArray(data)) {
     return [];
   }
 
-  const ranked = data
+  return data
     .map((row) => {
       const normalizedRow = (row as Record<string, unknown>) ?? {};
-      const content = getChunkContent(normalizedRow);
-      const storedEmbedding = parseEmbeddingValue(normalizedRow.embedding);
+      const storedEmbedding =
+        parseEmbeddingValue(normalizedRow.vector) ??
+        parseEmbeddingValue(normalizedRow.embedding);
       const similarity = storedEmbedding ? cosineSimilarity(queryEmbedding, storedEmbedding) : 0;
 
       return {
-        content,
-        score: similarity,
+        ...toClassChunk(normalizedRow),
+        similarity,
       };
     })
-    .filter((item) => item.content.length > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 6);
+    .filter((chunk) => chunk.content.length > 0)
+    .filter((chunk) => chunk.similarity >= threshold)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, matchCount);
+}
 
-  return ranked.map((item) => ({ content: item.content }));
+function formatChunkPages(chunk: ClassChunk) {
+  if (chunk.pageStart !== null && chunk.pageEnd !== null) {
+    if (chunk.pageStart === chunk.pageEnd) {
+      return `${chunk.pageStart}`;
+    }
+
+    return `${chunk.pageStart}-${chunk.pageEnd}`;
+  }
+
+  if (chunk.pageStart !== null) {
+    return `${chunk.pageStart}`;
+  }
+
+  if (chunk.pageEnd !== null) {
+    return `${chunk.pageEnd}`;
+  }
+
+  return "unknown";
+}
+
+function buildClassContext(chunks: ClassChunk[]) {
+  if (chunks.length === 0) {
+    return "Relevant uploaded class materials:\n(none)";
+  }
+
+  return [
+    "Relevant uploaded class materials:",
+    ...chunks.map((chunk, index) =>
+      [
+        `[${index + 1}] Chunk ID: ${chunk.chunkId}`,
+        `Material ID: ${chunk.materialId ?? "unknown"}`,
+        `Page(s): ${formatChunkPages(chunk)}`,
+        `Similarity: ${chunk.similarity.toFixed(3)}`,
+        `Content: ${chunk.content}`,
+      ].join("\n"),
+    ),
+  ].join("\n\n");
+}
+
+async function getChatById({
+  chatId,
+  supabase,
+  userId,
+}: {
+  chatId: string;
+  supabase: SupabaseClient;
+  userId: string;
+}) {
+  const { data, error } = await supabase
+    .from("chats")
+    .select("id, class_id")
+    .eq("id", chatId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) {
+    throw new Error("Chat not found.");
+  }
+
+  return data as ChatRow;
 }
 
 async function answerSmallTalk({
@@ -519,7 +655,7 @@ async function answerSmallTalk({
   });
 }
 
-async function answerWithClassContext({
+async function answerWithClassMaterials({
   chunks,
   message,
   recentMessages,
@@ -528,14 +664,14 @@ async function answerWithClassContext({
   message: string;
   recentMessages: StoredChatMessage[];
 }) {
-  const hasChunks = chunks.length > 0;
-  const classSection = hasChunks
-    ? [
-        "Relevant class material:",
-        ...chunks.map((chunk, index) => `[chunk ${index + 1}] ${chunk.content}`),
-      ].join("\n")
-    : "Relevant class material:\n(none found)";
-  const userMessageWithContext = `${message}\n\n${classSection}`;
+  const classSection = buildClassContext(chunks);
+  const userMessageWithContext = [
+    "Context:",
+    classSection,
+    "",
+    "Student question:",
+    message,
+  ].join("\n");
   const inputMessages = [
     ...recentMessages,
     { content: userMessageWithContext, messageIndex: -1, role: "user" as const },
@@ -544,10 +680,12 @@ async function answerWithClassContext({
   return callOpenAiResponse({
     input: toOpenAiConversationInput(inputMessages),
     instructions: [
-      POPUP_STUDY_ASSISTANT_SYSTEM_PROMPT,
-      "Use the class material first when answering.",
-      "If relevant class material is missing, clearly say uploaded class materials do not contain enough information.",
-      "After that, provide a brief general explanation if helpful.",
+      "You are an AI study assistant. Use the provided class material context to answer the student's question.",
+      "Use previous chat messages for follow-up context when helpful.",
+      "Answer primarily using the uploaded class materials.",
+      "If the context does not contain enough relevant information, say so clearly.",
+      "Do not invent facts that are not supported by the retrieved context.",
+      "If there is not enough relevant class context, optionally provide a brief general explanation after stating that limitation.",
     ].join("\n\n"),
   });
 }
@@ -598,16 +736,7 @@ async function handleChatMessage({
   supabase: SupabaseClient;
   userId: string;
 }) {
-  const { data: chatRow, error: chatError } = await supabase
-    .from("chats")
-    .select("id, class_id")
-    .eq("id", chatId)
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (chatError || !chatRow) {
-    throw new Error("Chat not found.");
-  }
+  const chatRow = await getChatById({ chatId, supabase, userId });
 
   const nextUserMessageIndex = await getNextMessageIndex({ chatId, supabase, userId });
   const timestamp = new Date().toISOString();
@@ -643,13 +772,36 @@ async function handleChatMessage({
       recentMessages: recentMessages.slice(0, -1),
     });
   } else if (intent === "class_material_question" && hasLinkedClass) {
-    const chunks = await retrieveClassChunks({
+    const queryEmbedding = await embedUserQuery(message);
+    const chunks = await matchMaterialChunks({
       classId: chatRow.class_id as string,
+      matchCount: CLASS_CHUNK_MATCH_COUNT,
+      queryEmbedding,
+      threshold: CLASS_CHUNK_SIMILARITY_THRESHOLD,
       supabase,
-      userMessage: message,
     });
-    assistantText = await answerWithClassContext({
-      chunks,
+
+    if (chunks.length === 0) {
+      assistantText = await callOpenAiResponse({
+        input: toOpenAiConversationInput([
+          ...recentMessages.slice(0, -1),
+          { content: message, messageIndex: -1, role: "user" as const },
+        ]),
+        instructions: [
+          "You are an AI study assistant.",
+          "Tell the student clearly that the uploaded class materials do not contain enough relevant information for this question.",
+          "Then optionally provide a short general explanation that may still help.",
+        ].join("\n\n"),
+      });
+    } else {
+      assistantText = await answerWithClassMaterials({
+        chunks,
+        message,
+        recentMessages: recentMessages.slice(0, -1),
+      });
+    }
+  } else if (intent === "class_material_question") {
+    assistantText = await answerGeneric({
       message,
       recentMessages: recentMessages.slice(0, -1),
     });

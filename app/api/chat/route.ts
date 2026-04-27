@@ -62,9 +62,15 @@ type ClassChunk = {
   chunkId: string;
   content: string;
   materialId: string | null;
+  materialTitle: string | null;
   pageEnd: number | null;
   pageStart: number | null;
   similarity: number;
+};
+
+type ClassMaterial = {
+  id: string;
+  title: string;
 };
 
 type ChatRow = {
@@ -74,6 +80,8 @@ type ChatRow = {
 
 const CLASS_CHUNK_MATCH_COUNT = 6;
 const CLASS_CHUNK_SIMILARITY_THRESHOLD = 0.5;
+const CLASS_MATERIAL_FETCH_LIMIT = 100;
+const CLASS_CHUNK_SCAN_LIMIT = 1000;
 
 const POPUP_STUDY_ASSISTANT_SYSTEM_PROMPT = [
   "You are an AI study assistant.",
@@ -449,6 +457,34 @@ function getMaterialId(row: Record<string, unknown>) {
   return null;
 }
 
+function getMaterialTitle(row: Record<string, unknown>) {
+  const candidates = [
+    row.material_title,
+    row.title,
+    row.file_name,
+    row.filename,
+    row.name,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  const material = row.material ?? row.materials;
+
+  if (material && typeof material === "object" && !Array.isArray(material)) {
+    const title = (material as Record<string, unknown>).title;
+
+    if (typeof title === "string" && title.trim().length > 0) {
+      return title.trim();
+    }
+  }
+
+  return null;
+}
+
 function getNumericValue(row: Record<string, unknown>, key: string) {
   const value = row[key];
 
@@ -496,10 +532,171 @@ function toClassChunk(row: Record<string, unknown>) {
     chunkId: getChunkId(row),
     content: getChunkContent(row),
     materialId: getMaterialId(row),
+    materialTitle: getMaterialTitle(row),
     pageEnd: getNumericValue(row, "page_end"),
     pageStart: getNumericValue(row, "page_start"),
     similarity: getSimilarityScore(row) ?? 0,
   };
+}
+
+function withMaterialTitles(chunks: ClassChunk[], materials: ClassMaterial[]) {
+  if (chunks.length === 0 || materials.length === 0) {
+    return chunks;
+  }
+
+  const titlesById = new Map(materials.map((material) => [material.id, material.title]));
+
+  return chunks.map((chunk) => {
+    if (chunk.materialTitle || !chunk.materialId) {
+      return chunk;
+    }
+
+    return {
+      ...chunk,
+      materialTitle: titlesById.get(chunk.materialId) ?? null,
+    };
+  });
+}
+
+function scoreStoredChunkRows({
+  matchCount,
+  queryEmbedding,
+  rows,
+  threshold,
+}: {
+  matchCount: number;
+  queryEmbedding: number[];
+  rows: unknown[];
+  threshold: number;
+}) {
+  return rows
+    .map((row) => {
+      const normalizedRow = (row as Record<string, unknown>) ?? {};
+      const storedEmbedding =
+        parseEmbeddingValue(normalizedRow.vector) ??
+        parseEmbeddingValue(normalizedRow.embedding);
+      const similarity = storedEmbedding ? cosineSimilarity(queryEmbedding, storedEmbedding) : 0;
+
+      return {
+        ...toClassChunk(normalizedRow),
+        similarity,
+      };
+    })
+    .filter((chunk) => chunk.content.length > 0)
+    .filter((chunk) => chunk.similarity >= threshold)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, matchCount);
+}
+
+async function matchChunksByClassColumn({
+  classId,
+  matchCount,
+  queryEmbedding,
+  threshold,
+  supabase,
+}: {
+  classId: string;
+  matchCount: number;
+  queryEmbedding: number[];
+  threshold: number;
+  supabase: SupabaseClient;
+}) {
+  const { data, error } = await supabase
+    .from("material_chunks")
+    .select("id, content, material_id, page_start, page_end, vector")
+    .eq("class_id", classId)
+    .limit(CLASS_CHUNK_SCAN_LIMIT);
+
+  if (error || !Array.isArray(data)) {
+    return [];
+  }
+
+  return scoreStoredChunkRows({
+    matchCount,
+    queryEmbedding,
+    rows: data,
+    threshold,
+  });
+}
+
+async function getClassMaterials({
+  classId,
+  supabase,
+}: {
+  classId: string;
+  supabase: SupabaseClient;
+}) {
+  const { data, error } = await supabase
+    .from("materials")
+    .select("id, title")
+    .eq("class_id", classId)
+    .limit(CLASS_MATERIAL_FETCH_LIMIT);
+
+  if (error || !Array.isArray(data)) {
+    return [];
+  }
+
+  return data
+    .map((row) => {
+      const material = (row as Record<string, unknown>) ?? {};
+      const id = material.id;
+      const title = material.title;
+
+      if (
+        typeof id !== "string" ||
+        id.trim().length === 0 ||
+        typeof title !== "string" ||
+        title.trim().length === 0
+      ) {
+        return null;
+      }
+
+      return {
+        id: id.trim(),
+        title: title.trim(),
+      };
+    })
+    .filter((material): material is ClassMaterial => material !== null);
+}
+
+async function matchChunksByClassMaterials({
+  classId,
+  matchCount,
+  queryEmbedding,
+  threshold,
+  supabase,
+}: {
+  classId: string;
+  matchCount: number;
+  queryEmbedding: number[];
+  threshold: number;
+  supabase: SupabaseClient;
+}) {
+  const materials = await getClassMaterials({ classId, supabase });
+  const materialIds = materials.map((material) => material.id);
+
+  if (materialIds.length === 0) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("material_chunks")
+    .select("id, content, material_id, page_start, page_end, vector")
+    .in("material_id", materialIds)
+    .limit(CLASS_CHUNK_SCAN_LIMIT);
+
+  if (error || !Array.isArray(data)) {
+    return [];
+  }
+
+  const chunks = scoreStoredChunkRows({
+    matchCount,
+    queryEmbedding,
+    rows: data,
+    threshold,
+  });
+
+  return withMaterialTitles(chunks, materials);
 }
 
 async function matchMaterialChunks({
@@ -540,37 +737,35 @@ async function matchMaterialChunks({
       .slice(0, matchCount);
 
     if (chunks.length > 0) {
-      return chunks;
+      return withMaterialTitles(
+        chunks,
+        await getClassMaterials({ classId, supabase }),
+      );
     }
   }
 
-  const { data, error } = await supabase
-    .from("material_chunks")
-    .select("id, content, material_id, page_start, page_end, vector")
-    .eq("class_id", classId)
-    .limit(120);
+  const chunksByClassColumn = await matchChunksByClassColumn({
+    classId,
+    matchCount,
+    queryEmbedding,
+    threshold,
+    supabase,
+  });
 
-  if (error || !Array.isArray(data)) {
-    return [];
+  if (chunksByClassColumn.length > 0) {
+    return withMaterialTitles(
+      chunksByClassColumn,
+      await getClassMaterials({ classId, supabase }),
+    );
   }
 
-  return data
-    .map((row) => {
-      const normalizedRow = (row as Record<string, unknown>) ?? {};
-      const storedEmbedding =
-        parseEmbeddingValue(normalizedRow.vector) ??
-        parseEmbeddingValue(normalizedRow.embedding);
-      const similarity = storedEmbedding ? cosineSimilarity(queryEmbedding, storedEmbedding) : 0;
-
-      return {
-        ...toClassChunk(normalizedRow),
-        similarity,
-      };
-    })
-    .filter((chunk) => chunk.content.length > 0)
-    .filter((chunk) => chunk.similarity >= threshold)
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, matchCount);
+  return matchChunksByClassMaterials({
+    classId,
+    matchCount,
+    queryEmbedding,
+    threshold,
+    supabase,
+  });
 }
 
 function formatChunkPages(chunk: ClassChunk) {
@@ -593,6 +788,91 @@ function formatChunkPages(chunk: ClassChunk) {
   return "unknown";
 }
 
+function formatReferencePage(chunk: ClassChunk) {
+  const pages = formatChunkPages(chunk);
+
+  return pages === "unknown" ? "Page unknown" : `Page ${pages}`;
+}
+
+function getReferencePageNumber(chunk: ClassChunk) {
+  return chunk.pageStart ?? chunk.pageEnd;
+}
+
+function escapeMarkdownLinkText(value: string) {
+  return value.replace(/([\\[\]])/g, "\\$1");
+}
+
+function buildReferenceHref({
+  chunk,
+  classId,
+  title,
+}: {
+  chunk: ClassChunk;
+  classId: string;
+  title: string;
+}) {
+  if (!chunk.materialId) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    classId,
+    materialId: chunk.materialId,
+    title,
+  });
+  const page = getReferencePageNumber(chunk);
+
+  if (page !== null) {
+    params.set("page", String(page));
+  }
+
+  return `#pdf-reference?${params.toString()}`;
+}
+
+function buildClassReferences(chunks: ClassChunk[], classId: string) {
+  const references: string[] = [];
+  const seen = new Set<string>();
+
+  for (const chunk of chunks) {
+    const title = chunk.materialTitle ?? chunk.materialId ?? "Unknown PDF";
+    const referenceText = `${title} - ${formatReferencePage(chunk)}`;
+    const href = buildReferenceHref({ chunk, classId, title });
+    const reference = href
+      ? `[${escapeMarkdownLinkText(referenceText)}](${href})`
+      : referenceText;
+
+    if (seen.has(referenceText)) {
+      continue;
+    }
+
+    seen.add(referenceText);
+    references.push(reference);
+  }
+
+  if (references.length === 0) {
+    return "";
+  }
+
+  return ["References", ...references].join("\n");
+}
+
+function removeChunkIdMentions(answer: string) {
+  return answer
+    .replace(/\s*\((?:chunk|Chunk)\s+[a-z0-9:_-]+\)/g, "")
+    .replace(/\s*\[(?:chunk|Chunk)\s+[a-z0-9:_-]+\]/g, "");
+}
+
+function appendClassReferences(answer: string, chunks: ClassChunk[], classId: string) {
+  const references = buildClassReferences(chunks, classId);
+  const cleanAnswer = removeChunkIdMentions(answer).trim();
+
+  if (!references) {
+    return cleanAnswer;
+  }
+
+  return `${cleanAnswer}\n\n${references}`;
+}
+
 function buildClassContext(chunks: ClassChunk[]) {
   if (chunks.length === 0) {
     return "Relevant uploaded class materials:\n(none)";
@@ -602,8 +882,8 @@ function buildClassContext(chunks: ClassChunk[]) {
     "Relevant uploaded class materials:",
     ...chunks.map((chunk, index) =>
       [
-        `[${index + 1}] Chunk ID: ${chunk.chunkId}`,
-        `Material ID: ${chunk.materialId ?? "unknown"}`,
+        `[${index + 1}] Class material excerpt`,
+        `PDF name: ${chunk.materialTitle ?? "unknown"}`,
         `Page(s): ${formatChunkPages(chunk)}`,
         `Similarity: ${chunk.similarity.toFixed(3)}`,
         `Content: ${chunk.content}`,
@@ -683,6 +963,8 @@ async function answerWithClassMaterials({
       "You are an AI study assistant. Use the provided class material context to answer the student's question.",
       "Use previous chat messages for follow-up context when helpful.",
       "Answer primarily using the uploaded class materials.",
+      "Do not include a references section; source references are appended separately.",
+      "Never mention chunk IDs or internal source IDs in the student-facing answer.",
       "If the context does not contain enough relevant information, say so clearly.",
       "Do not invent facts that are not supported by the retrieved context.",
       "If there is not enough relevant class context, optionally provide a brief general explanation after stating that limitation.",
@@ -794,11 +1076,12 @@ async function handleChatMessage({
         ].join("\n\n"),
       });
     } else {
-      assistantText = await answerWithClassMaterials({
+      const classAnswer = await answerWithClassMaterials({
         chunks,
         message,
         recentMessages: recentMessages.slice(0, -1),
       });
+      assistantText = appendClassReferences(classAnswer, chunks, chatRow.class_id as string);
     }
   } else if (intent === "class_material_question") {
     assistantText = await answerGeneric({

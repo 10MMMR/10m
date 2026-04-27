@@ -2,11 +2,22 @@
 
 import {
   ArrowLeftIcon,
+  ArrowRightIcon,
   PaperAirplaneIcon,
   PencilSquareIcon,
+  XMarkIcon,
 } from "@heroicons/react/24/outline";
 import type { User } from "@supabase/supabase-js";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  FormEvent,
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAuth } from "@/app/_global/authentication/auth-context";
@@ -19,6 +30,14 @@ type ChatMessage = {
   messageIndex: number;
   role: ChatMessageRole;
 };
+
+type PdfReference = {
+  classId: string;
+  materialId: string;
+  page: number | null;
+  title: string;
+};
+
 type UserClassItem = {
   id: string;
   name: string | null;
@@ -27,6 +46,7 @@ type UserClassItem = {
 type NewChatSessionPanelProps = {
   classId?: string | null;
   existingChatId?: string | null;
+  onChatActivity?: () => void;
   onBack: () => void;
 };
 
@@ -73,25 +93,94 @@ type PopupAssistantResponse = {
   userMessage?: ChatMessage;
 };
 
+type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+type PdfDocumentProxy = Awaited<ReturnType<PdfJsModule["getDocument"]>["promise"]>;
+
+const CLASS_MATERIALS_BUCKET = "class_materials";
+const COMPOSER_MAX_HEIGHT = 160;
+const PDF_REFERENCE_PREFIX = "#pdf-reference?";
+
+let pdfJsPromise: Promise<PdfJsModule> | null = null;
+
+const loadPdfJs = async () => {
+  if (!pdfJsPromise) {
+    pdfJsPromise = import("pdfjs-dist/legacy/build/pdf.mjs");
+  }
+
+  return pdfJsPromise;
+};
+
 function renderPlainUserMessage(content: string) {
   return <p className="whitespace-pre-wrap break-words">{content}</p>;
 }
 
-function renderAssistantMarkdown(content: string) {
+function resizeComposer(textarea: HTMLTextAreaElement) {
+  textarea.style.height = "auto";
+
+  const nextHeight = Math.min(textarea.scrollHeight, COMPOSER_MAX_HEIGHT);
+  textarea.style.height = `${nextHeight}px`;
+  textarea.style.overflowY = textarea.scrollHeight > COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
+}
+
+function parsePdfReferenceHref(href?: string) {
+  if (!href?.startsWith(PDF_REFERENCE_PREFIX)) {
+    return null;
+  }
+
+  const params = new URLSearchParams(href.slice(PDF_REFERENCE_PREFIX.length));
+  const classId = params.get("classId")?.trim();
+  const materialId = params.get("materialId")?.trim();
+
+  if (!classId || !materialId) {
+    return null;
+  }
+
+  const pageValue = Number(params.get("page"));
+  const page = Number.isInteger(pageValue) && pageValue > 0 ? pageValue : null;
+  const title = params.get("title")?.trim() || "PDF reference";
+
+  return {
+    classId,
+    materialId,
+    page,
+    title,
+  } satisfies PdfReference;
+}
+
+function renderAssistantMarkdown(
+  content: string,
+  onOpenPdfReference: (reference: PdfReference) => void,
+) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        a: ({ children, href }) => (
-          <a
-            className="font-medium text-(--main) underline underline-offset-2 transition-colors duration-200 hover:text-(--text-secondary)"
-            href={href}
-            rel="noreferrer"
-            target="_blank"
-          >
-            {children}
-          </a>
-        ),
+        a: ({ children, href }) => {
+          const reference = parsePdfReferenceHref(href);
+
+          if (reference) {
+            return (
+              <button
+                className="cursor-pointer font-medium text-(--main) underline underline-offset-2 transition-colors duration-200 hover:text-(--text-secondary)"
+                onClick={() => onOpenPdfReference(reference)}
+                type="button"
+              >
+                {children}
+              </button>
+            );
+          }
+
+          return (
+            <a
+              className="font-medium text-(--main) underline underline-offset-2 transition-colors duration-200 hover:text-(--text-secondary)"
+              href={href}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {children}
+            </a>
+          );
+        },
         code: ({ children, className, ...props }) => {
           if ("inline" in props && props.inline) {
             return (
@@ -125,15 +214,17 @@ function renderAssistantMarkdown(content: string) {
 
 function MessageBody({
   content,
+  onOpenPdfReference,
   role,
 }: {
   content: string;
+  onOpenPdfReference: (reference: PdfReference) => void;
   role: ChatMessageRole;
 }) {
   if (role === "assistant") {
     return (
       <div className="space-y-3 break-words">
-        {renderAssistantMarkdown(content)}
+        {renderAssistantMarkdown(content, onOpenPdfReference)}
       </div>
     );
   }
@@ -145,9 +236,318 @@ function MessageBody({
   );
 }
 
+async function findPdfInStorageFolder(folderPath: string) {
+  if (!supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase.storage
+    .from(CLASS_MATERIALS_BUCKET)
+    .list(folderPath, { limit: 20 });
+
+  if (error || !Array.isArray(data)) {
+    return null;
+  }
+
+  const file = data.find((item) => item.name.toLowerCase().endsWith(".pdf"));
+
+  return file?.name ? `${folderPath}/${file.name}` : null;
+}
+
+async function resolveMaterialPdfPath(reference: PdfReference, userId?: string | null) {
+  const classMaterialPath = await findPdfInStorageFolder(
+    `${reference.classId}/${reference.materialId}`,
+  );
+
+  if (classMaterialPath) {
+    return classMaterialPath;
+  }
+
+  if (!supabase) {
+    return null;
+  }
+
+  const { data } = await supabase
+    .from("materials")
+    .select("filepath")
+    .eq("id", reference.materialId)
+    .eq("class_id", reference.classId)
+    .maybeSingle();
+  const filepath = (data as { filepath?: unknown } | null)?.filepath;
+
+  if (typeof filepath === "string" && filepath.trim().length > 0) {
+    return filepath.trim();
+  }
+
+  if (!userId) {
+    return null;
+  }
+
+  return findPdfInStorageFolder(`${userId}/${reference.materialId}`);
+}
+
+function PdfCanvasViewer({
+  initialPage,
+  sourceUrl,
+}: {
+  initialPage: number;
+  sourceUrl: string;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const documentRef = useRef<PdfDocumentProxy | null>(null);
+  const [currentPage, setCurrentPage] = useState(initialPage);
+  const [pageCount, setPageCount] = useState<number | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [isRendering, setIsRendering] = useState(true);
+
+  useEffect(() => {
+    let ignore = false;
+
+    const loadDocument = async () => {
+      setRenderError(null);
+      setIsRendering(true);
+      setPageCount(null);
+
+      try {
+        const pdfJs = await loadPdfJs();
+        const { getDocument, GlobalWorkerOptions } = pdfJs;
+        GlobalWorkerOptions.workerSrc = new URL(
+          "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+          import.meta.url,
+        ).toString();
+        const pdf = await getDocument({ url: sourceUrl }).promise;
+
+        if (ignore) {
+          await pdf.destroy();
+          return;
+        }
+
+        documentRef.current = pdf;
+        const nextPage = Math.min(Math.max(initialPage, 1), pdf.numPages);
+        setCurrentPage(nextPage);
+        setPageCount(pdf.numPages);
+      } catch {
+        if (!ignore) {
+          setRenderError("Unable to open this PDF.");
+          setIsRendering(false);
+        }
+      }
+    };
+
+    void loadDocument();
+
+    return () => {
+      ignore = true;
+      const document = documentRef.current;
+      documentRef.current = null;
+      void document?.destroy();
+    };
+  }, [initialPage, sourceUrl]);
+
+  useEffect(() => {
+    const document = documentRef.current;
+    const canvas = canvasRef.current;
+
+    if (!document || !canvas) {
+      return;
+    }
+
+    let ignore = false;
+
+    const renderPage = async () => {
+      setRenderError(null);
+      setIsRendering(true);
+
+      try {
+        const page = await document.getPage(currentPage);
+        const viewport = page.getViewport({ scale: 1.35 });
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+          throw new Error("Canvas is unavailable.");
+        }
+
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.style.width = `${viewport.width}px`;
+        canvas.style.height = `${viewport.height}px`;
+
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+
+        if (!ignore) {
+          setIsRendering(false);
+        }
+      } catch {
+        if (!ignore) {
+          setRenderError("Unable to render this page.");
+          setIsRendering(false);
+        }
+      }
+    };
+
+    void renderPage();
+
+    return () => {
+      ignore = true;
+    };
+  }, [currentPage, pageCount]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between gap-3 border-b border-(--border-soft) px-4 py-3">
+        <button
+          aria-label="Previous page"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-(--border-soft) bg-(--surface-base) text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint) disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={currentPage <= 1}
+          onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+          type="button"
+        >
+          <ArrowLeftIcon aria-hidden="true" className="h-4 w-4" />
+        </button>
+        <p className="text-sm font-semibold text-(--text-main)">
+          Page {currentPage}
+          {pageCount ? ` / ${pageCount}` : ""}
+        </p>
+        <button
+          aria-label="Next page"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-(--border-soft) bg-(--surface-base) text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint) disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={pageCount !== null && currentPage >= pageCount}
+          onClick={() => setCurrentPage((page) => (pageCount ? Math.min(pageCount, page + 1) : page + 1))}
+          type="button"
+        >
+          <ArrowRightIcon aria-hidden="true" className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="relative min-h-0 flex-1 overflow-auto bg-(--surface-main-faint) p-4">
+        {isRendering ? (
+          <div className="absolute inset-x-0 top-4 z-10 mx-auto w-fit rounded-full border border-(--border-soft) bg-(--surface-base) px-3 py-1.5 text-xs font-semibold text-(--text-muted) shadow-(--shadow-floating)">
+            Loading page...
+          </div>
+        ) : null}
+        {renderError ? (
+          <div className="flex h-full items-center justify-center text-sm font-semibold text-(--destructive)">
+            {renderError}
+          </div>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            className="mx-auto max-w-full rounded-lg bg-(--surface-base) shadow-(--shadow-floating)"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PdfReferenceModal({
+  onClose,
+  reference,
+  userId,
+}: {
+  onClose: () => void;
+  reference: PdfReference;
+  userId?: string | null;
+}) {
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ignore = false;
+    let objectUrl: string | null = null;
+
+    const loadPdf = async () => {
+      setPdfUrl(null);
+      setLoadError(null);
+
+      try {
+        if (!supabase) {
+          throw new Error("Supabase is unavailable.");
+        }
+
+        const storagePath = await resolveMaterialPdfPath(reference, userId);
+
+        if (!storagePath) {
+          throw new Error("PDF not found.");
+        }
+
+        const { data, error } = await supabase.storage
+          .from(CLASS_MATERIALS_BUCKET)
+          .download(storagePath);
+
+        if (error || !data) {
+          throw new Error("Unable to download PDF.");
+        }
+
+        objectUrl = URL.createObjectURL(data);
+
+        if (ignore) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+
+        setPdfUrl(objectUrl);
+      } catch {
+        if (!ignore) {
+          setLoadError("Unable to load this PDF reference.");
+        }
+      }
+    };
+
+    void loadPdf();
+
+    return () => {
+      ignore = true;
+
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [reference, userId]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-(--overlay-scrim) p-3 backdrop-blur-sm">
+      <section className="flex h-5/6 w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-(--border-floating) bg-(--surface-base) shadow-(--shadow-floating)">
+        <header className="flex items-center justify-between gap-4 border-b border-(--border-soft) px-4 py-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold text-(--text-main)">
+              {reference.title}
+            </p>
+            <p className="text-xs font-semibold text-(--text-muted)">
+              {reference.page ? `Opening page ${reference.page}` : "Opening PDF"}
+            </p>
+          </div>
+          <button
+            aria-label="Close PDF reference"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-(--border-soft) bg-(--surface-base) text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)"
+            onClick={onClose}
+            type="button"
+          >
+            <XMarkIcon aria-hidden="true" className="h-5 w-5" />
+          </button>
+        </header>
+        {loadError ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm font-semibold text-(--destructive)">
+            {loadError}
+          </div>
+        ) : pdfUrl ? (
+          <PdfCanvasViewer
+            initialPage={reference.page ?? 1}
+            sourceUrl={pdfUrl}
+          />
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center text-sm font-semibold text-(--text-muted)">
+            Loading PDF...
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 export function NewChatSessionPanel({
   classId = null,
   existingChatId = null,
+  onChatActivity,
   onBack,
 }: NewChatSessionPanelProps) {
   const { user } = useAuth();
@@ -166,6 +566,8 @@ export function NewChatSessionPanel({
   const [titleDraft, setTitleDraft] = useState("New chat");
   const [wasTitleEditedBeforeFirstSend, setWasTitleEditedBeforeFirstSend] = useState(false);
   const [isAwaitingAssistant, setIsAwaitingAssistant] = useState(false);
+  const [activePdfReference, setActivePdfReference] = useState<PdfReference | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const hasScrolledToBottomOnOpenRef = useRef(false);
   const hasUserMessage = useMemo(
@@ -434,6 +836,10 @@ export function NewChatSessionPanel({
         },
       ]);
       setComposerValue("");
+      if (composerTextareaRef.current) {
+        composerTextareaRef.current.style.height = "";
+        composerTextareaRef.current.style.overflowY = "hidden";
+      }
       setIsSending(true);
       setIsAwaitingAssistant(true);
 
@@ -585,6 +991,7 @@ export function NewChatSessionPanel({
           returnedAssistant,
         ]);
         cleanupStateRef.current.hasUserMessage = true;
+        onChatActivity?.();
         setIsSending(false);
         setIsAwaitingAssistant(false);
       } catch {
@@ -602,6 +1009,7 @@ export function NewChatSessionPanel({
       isDraftChat,
       isSending,
       messages,
+      onChatActivity,
       selectedClassId,
       setTitleImmediate,
       titleDraft,
@@ -655,17 +1063,27 @@ export function NewChatSessionPanel({
     [chatId, user],
   );
 
+  const handleOpenPdfReference = useCallback((reference: PdfReference) => {
+    setActivePdfReference(reference);
+  }, []);
+
+  const handleComposerChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
+    setComposerValue(event.currentTarget.value);
+    resizeComposer(event.currentTarget);
+  }, []);
+
+  const handleComposerKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  }, []);
+
   if (isInitializing) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <button
-          className="inline-flex w-fit items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-semibold text-(--text-muted) transition-colors duration-200 hover:bg-(--surface-main-faint) hover:text-(--text-main)"
-          onClick={onBack}
-          type="button"
-        >
-          <ArrowLeftIcon aria-hidden="true" className="h-4 w-4" />
-          Back
-        </button>
         <div className="flex min-h-0 flex-1 items-center justify-center">
           <div
             aria-label="Loading chat"
@@ -804,7 +1222,7 @@ export function NewChatSessionPanel({
               key={`${message.role}-${message.messageIndex}-${index}`}
               className={`flex ${isUserMessage ? "justify-end" : "justify-start"}`}
             >
-              <div className={`max-w-[88%] ${isUserMessage ? "items-end" : "items-start"} flex flex-col`}>
+              <div className={`${isUserMessage ? "max-w-[88%] items-end" : "w-full items-start"} flex flex-col`}>
                 <p className="flex items-center gap-2 text-xs font-semibold text-(--text-muted)">
                   <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-(--border-soft) bg-(--surface-base) text-[11px] font-bold text-(--text-main)">
                     {actorIconText}
@@ -818,7 +1236,11 @@ export function NewChatSessionPanel({
                       : "border-(--border-soft) bg-(--surface-base) text-(--text-main)"
                   }`}
                 >
-                  <MessageBody content={message.content} role={message.role} />
+                  <MessageBody
+                    content={message.content}
+                    onOpenPdfReference={handleOpenPdfReference}
+                    role={message.role}
+                  />
                 </div>
               </div>
             </article>
@@ -830,11 +1252,15 @@ export function NewChatSessionPanel({
       </div>
 
       <form className="mt-4 border-t border-(--border-soft) pt-3" onSubmit={handleSend}>
-        <div className="flex items-center gap-2 rounded-xl border border-(--border-soft) bg-(--surface-base) px-2 py-2">
-          <input
-            className="h-10 min-w-0 flex-1 border-0 bg-transparent px-2 text-sm text-(--text-main) outline-none"
-            onChange={(event) => setComposerValue(event.target.value)}
+        <div className="flex items-end gap-2 rounded-xl border border-(--border-soft) bg-(--surface-base) px-2 py-2">
+          <textarea
+            ref={composerTextareaRef}
+            className="max-h-40 min-h-10 min-w-0 flex-1 resize-none overflow-y-hidden border-0 bg-transparent px-2 py-2 text-sm leading-6 text-(--text-main) outline-none"
+            onChange={handleComposerChange}
+            onInput={(event) => resizeComposer(event.currentTarget)}
+            onKeyDown={handleComposerKeyDown}
             placeholder="Type your message..."
+            rows={1}
             value={composerValue}
           />
           <button
@@ -847,6 +1273,13 @@ export function NewChatSessionPanel({
           </button>
         </div>
       </form>
+      {activePdfReference ? (
+        <PdfReferenceModal
+          onClose={() => setActivePdfReference(null)}
+          reference={activePdfReference}
+          userId={user?.id}
+        />
+      ) : null}
     </div>
   );
 }

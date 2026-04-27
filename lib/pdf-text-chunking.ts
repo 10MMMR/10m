@@ -768,6 +768,8 @@ export async function chunkPdfText(
 export type ChunkEmbedding = {
   chunk_index: number;
   content: string;
+  page_start: number;
+  page_end: number;
   pages: number[];
   embedding: number[];
 };
@@ -776,6 +778,8 @@ export function pairChunksWithEmbeddings(chunks: PdfChunk[], embeddings: number[
   return chunks.map((chunk, index) => ({
     chunk_index: chunk.chunk_index,
     content: chunk.content,
+    page_start: chunk.page_start,
+    page_end: chunk.page_end,
     pages: chunk.pages,
     embedding: embeddings[index] ?? [],
   } satisfies ChunkEmbedding));

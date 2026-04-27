@@ -166,6 +166,8 @@ export function NewChatSessionPanel({
   const [titleDraft, setTitleDraft] = useState("New chat");
   const [wasTitleEditedBeforeFirstSend, setWasTitleEditedBeforeFirstSend] = useState(false);
   const [isAwaitingAssistant, setIsAwaitingAssistant] = useState(false);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const hasScrolledToBottomOnOpenRef = useRef(false);
   const hasUserMessage = useMemo(
     () => messages.some((message) => message.role === "user"),
     [messages],
@@ -373,6 +375,26 @@ export function NewChatSessionPanel({
       void cleanupDraftChat();
     };
   }, [chatBootstrapKey, cleanupDraftChat, setTitleImmediate]);
+
+  useEffect(() => {
+    if (isInitializing) {
+      hasScrolledToBottomOnOpenRef.current = false;
+      return;
+    }
+
+    if (hasScrolledToBottomOnOpenRef.current) {
+      return;
+    }
+
+    const container = messagesContainerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
+    hasScrolledToBottomOnOpenRef.current = true;
+  }, [isInitializing, chatBootstrapKey]);
 
   useEffect(() => {
     const handleExit = () => {
@@ -768,7 +790,10 @@ export function NewChatSessionPanel({
         )}
       </div>
 
-      <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+      <div
+        ref={messagesContainerRef}
+        className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1"
+      >
         {messages.map((message, index) => {
           const isUserMessage = message.role === "user";
           const actorName = isUserMessage ? firstName : "Assistant";

@@ -105,6 +105,8 @@ function HomeContent({
   const { user } = useAuth();
   const [recentChats, setRecentChats] = useState<RecentChatItem[]>([]);
   const [isLoadingChats, setIsLoadingChats] = useState(true);
+  const visibleRecentChats = user ? recentChats : [];
+  const isRecentChatsLoading = Boolean(supabase && user && isLoadingChats);
 
   const readRecentChatsCache = useCallback(() => {
     if (typeof window === "undefined" || !user) {
@@ -150,10 +152,10 @@ function HomeContent({
 
   const loadRecentChats = useCallback(async (forceRefresh = false) => {
     if (!supabase || !user) {
-      setRecentChats([]);
-      setIsLoadingChats(false);
       return;
     }
+
+    await Promise.resolve();
 
     let hasCachedChats = false;
     if (!forceRefresh) {
@@ -208,7 +210,13 @@ function HomeContent({
   }, [readRecentChatsCache, user, writeRecentChatsCache]);
 
   useEffect(() => {
-    void loadRecentChats();
+    const timeoutId = window.setTimeout(() => {
+      void loadRecentChats();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [loadRecentChats, refreshNonce]);
 
   return (
@@ -222,13 +230,13 @@ function HomeContent({
 
       <section className="rounded-2xl border border-(--border-soft) bg-(--surface-main-xfaint) p-4">
         <h3 className="text-sm font-semibold">Recent chats</h3>
-        {isLoadingChats ? (
+        {isRecentChatsLoading ? (
           <p className="mt-3 text-xs text-(--text-muted)">Loading recent chats...</p>
-        ) : recentChats.length === 0 ? (
+        ) : visibleRecentChats.length === 0 ? (
           <p className="mt-3 text-sm text-(--text-muted)">You have no recent chats</p>
         ) : (
           <ul className="mt-3 space-y-2.5">
-            {recentChats.map((chat) => (
+            {visibleRecentChats.map((chat) => (
               <li key={chat.id}>
                 <button
                   className="group flex w-full cursor-pointer items-center justify-between rounded-xl border border-(--border-soft) bg-(--surface-base) px-3 py-2.5 text-left transition-colors duration-200 hover:bg-(--surface-main-faint)"

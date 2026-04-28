@@ -22,6 +22,8 @@ type UserClassItem = {
   name: string | null;
 };
 
+const EMPTY_USER_CLASSES: UserClassItem[] = [];
+
 type NewChatSessionPanelProps = {
   classId?: string | null;
   existingChatId?: string | null;
@@ -76,7 +78,7 @@ export function NewChatSessionPanel({
   existingChatId = null,
   onBack,
 }: NewChatSessionPanelProps) {
-  const { user } = useAuth();
+  const { status, user } = useAuth();
   const [chatId, setChatId] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState("");
   const [initError, setInitError] = useState<string | null>(null);
@@ -106,15 +108,19 @@ export function NewChatSessionPanel({
 
   const firstName = useMemo(() => getUserFirstName(user), [user]);
   const isDraftChat = !existingChatId;
-  const chatBootstrapKey = `${user?.id ?? ""}|${existingChatId ?? ""}|${classId ?? ""}|${firstName}`;
+  const visibleUserClasses = user ? userClasses : EMPTY_USER_CLASSES;
+  const isAuthLoading = status === "loading";
+  const cannotStartChat = !supabase || (!isAuthLoading && !user);
+  const visibleInitError = cannotStartChat ? "Unable to start chat right now." : initError;
+  const shouldShowInitializing = isAuthLoading || (!cannotStartChat && isInitializing);
   const selectedClassName = useMemo(() => {
     if (!selectedClassId) {
       return null;
     }
 
-    const linkedClass = userClasses.find((item) => item.id === selectedClassId);
+    const linkedClass = visibleUserClasses.find((item) => item.id === selectedClassId);
     return linkedClass?.name?.trim() || "Untitled class";
-  }, [selectedClassId, userClasses]);
+  }, [selectedClassId, visibleUserClasses]);
 
   const setTitleImmediate = useCallback((nextTitle: string) => {
     setChatTitle(nextTitle);
@@ -170,7 +176,6 @@ export function NewChatSessionPanel({
 
   useEffect(() => {
     if (!supabase || !user) {
-      setUserClasses([]);
       return;
     }
 
@@ -201,8 +206,6 @@ export function NewChatSessionPanel({
 
   useEffect(() => {
     if (!supabase || !user) {
-      setInitError("Unable to start chat right now.");
-      setIsInitializing(false);
       return;
     }
 
@@ -298,7 +301,7 @@ export function NewChatSessionPanel({
       ignore = true;
       void cleanupDraftChat();
     };
-  }, [chatBootstrapKey, cleanupDraftChat, setTitleImmediate]);
+  }, [classId, cleanupDraftChat, existingChatId, firstName, setTitleImmediate, user]);
 
   useEffect(() => {
     const handleExit = () => {
@@ -559,7 +562,7 @@ export function NewChatSessionPanel({
     [chatId, user],
   );
 
-  if (isInitializing) {
+  if (shouldShowInitializing) {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <button
@@ -581,7 +584,7 @@ export function NewChatSessionPanel({
     );
   }
 
-  if (initError) {
+  if (visibleInitError) {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <button
@@ -592,7 +595,7 @@ export function NewChatSessionPanel({
           <ArrowLeftIcon aria-hidden="true" className="h-4 w-4" />
           Back
         </button>
-        <p className="mt-4 text-sm text-(--destructive)">{initError}</p>
+        <p className="mt-4 text-sm text-(--destructive)">{visibleInitError}</p>
       </div>
     );
   }
@@ -669,11 +672,11 @@ export function NewChatSessionPanel({
             </button>
             {isClassPickerOpen ? (
               <div className="absolute top-full left-0 z-20 mt-2 w-64 rounded-xl border border-(--border-soft) bg-(--surface-base) p-2 shadow-(--shadow-floating)">
-                {userClasses.length === 0 ? (
+                {visibleUserClasses.length === 0 ? (
                   <p className="px-1 py-2 text-xs text-(--text-muted)">No classes available yet.</p>
                 ) : (
                   <ul className="space-y-1">
-                    {userClasses.map((classItem) => (
+                    {visibleUserClasses.map((classItem) => (
                       <li key={classItem.id}>
                         <button
                           className="w-full rounded-lg px-2 py-1.5 text-left text-xs font-semibold text-(--text-main) transition-colors duration-200 hover:bg-(--surface-main-faint)"

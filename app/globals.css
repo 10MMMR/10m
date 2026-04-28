@@ -573,6 +573,10 @@ input:focus-visible {
 .chat-popup-panel {
   overflow: hidden;
   transform-origin: bottom right;
+  transition:
+    border-color 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-radius 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .chat-popup-panel-enter {
@@ -586,6 +590,13 @@ input:focus-visible {
     width: 32vh;
     min-width: 29rem;
   }
+}
+
+.chat-popup-panel-fullscreen {
+  height: 100dvh;
+  min-height: 0;
+  min-width: 0;
+  width: 100vw;
 }
 
 @keyframes chat-popup-in {

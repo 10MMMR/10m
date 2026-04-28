@@ -30,6 +30,7 @@ const DEFAULT_CHUNK_SIZE_CHARS = 1400;
 const DEFAULT_CHUNK_OVERLAP_CHARS = 225;
 const CHARS_PER_WORD_ESTIMATE = 4;
 const MAX_OVERFLOW_RATIO = 1.15;
+const MAX_CHUNK_PAGE_SPAN = 2;
 
 function normalizeInlineSpaces(value: string) {
   return value.replace(/[ \t\f\v\u00A0]+/g, " ").trim();
@@ -361,6 +362,17 @@ function splitIntoParagraphs(page: PdfPageText) {
 }
 
 function shouldMergeAcrossPages(previous: ParagraphUnit, current: ParagraphUnit) {
+  if (previous.pages.length !== 1 || current.pages.length !== 1) {
+    return false;
+  }
+
+  const previousPage = previous.pages[0];
+  const currentPage = current.pages[0];
+
+  if (currentPage !== previousPage + 1) {
+    return false;
+  }
+
   return !endsLikeSentence(previous.text) && startsLikeContinuation(current.text);
 }
 
@@ -532,6 +544,24 @@ function buildTextFromUnits(units: ParagraphUnit[]) {
   return normalizeInlineSpaces(units.map((unit) => unit.text).join(" "));
 }
 
+function getPagesFromUnits(units: ParagraphUnit[]) {
+  return Array.from(new Set(units.flatMap((unit) => unit.pages))).sort(
+    (left, right) => left - right,
+  );
+}
+
+function getPageSpan(pages: number[]) {
+  if (pages.length === 0) {
+    return 0;
+  }
+
+  return pages[pages.length - 1] - pages[0] + 1;
+}
+
+function canAppendUnit(currentUnits: ParagraphUnit[], unit: ParagraphUnit) {
+  return getPageSpan(getPagesFromUnits([...currentUnits, unit])) <= MAX_CHUNK_PAGE_SPAN;
+}
+
 function estimateWordsFromChars(value: number) {
   return Math.max(1, Math.round(value / CHARS_PER_WORD_ESTIMATE));
 }
@@ -666,9 +696,7 @@ async function collectParagraphUnits(pages: PdfPageText[]) {
 }
 
 function buildChunk(index: number, content: string, units: ParagraphUnit[]) {
-  const pages = Array.from(new Set(units.flatMap((unit) => unit.pages))).sort(
-    (left, right) => left - right,
-  );
+  const pages = getPagesFromUnits(units);
 
   return {
     chunk_index: index,
@@ -745,6 +773,12 @@ export async function chunkPdfText(
     if (wouldExceedHardMax && currentUnits.length > 0) {
       const overlapSeed = flushChunk();
       currentUnits = overlapSeed;
+      currentWordCount = countWords(buildTextFromUnits(currentUnits));
+    }
+
+    if (currentUnits.length > 0 && !canAppendUnit(currentUnits, unit)) {
+      const overlapSeed = flushChunk();
+      currentUnits = canAppendUnit(overlapSeed, unit) ? overlapSeed : [];
       currentWordCount = countWords(buildTextFromUnits(currentUnits));
     }
 

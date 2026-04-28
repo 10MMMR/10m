@@ -15,6 +15,11 @@ import { type ChangeEvent, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/app/_global/authentication/auth-context";
 import { supabase } from "@/app/_global/authentication/supabaseClient";
+import {
+  chunkPdfText,
+  pairChunksWithEmbeddings,
+  type PdfPageText,
+} from "@/lib/pdf-text-chunking";
 
 type ClassDetailsHeaderProps = {
   classId: string;
@@ -25,6 +30,108 @@ type UploadStatusItem = {
   name: string;
   status: "loading" | "success" | "error";
   errorMessage: string | null;
+};
+
+type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+
+let pdfJsPromise: Promise<PdfJsModule> | null = null;
+
+const loadPdfJs = async () => {
+  if (!pdfJsPromise) {
+    pdfJsPromise = import("pdfjs-dist/legacy/build/pdf.mjs");
+  }
+
+  return pdfJsPromise;
+};
+
+const readPdfPages = async (file: File): Promise<PdfPageText[]> => {
+  if (typeof window === "undefined") {
+    throw new Error("PDF parsing is only available in the browser.");
+  }
+
+  const pdfJs = await loadPdfJs();
+  const { getDocument, GlobalWorkerOptions } = pdfJs;
+  const getDocumentCompat = getDocument as unknown as (source: {
+    data: Uint8Array;
+    disableWorker?: boolean;
+  }) => ReturnType<typeof getDocument>;
+  GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+    import.meta.url,
+  ).toString();
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let pdf: Awaited<ReturnType<typeof getDocument>["promise"]>;
+
+  try {
+    pdf = await getDocumentCompat({
+      data: bytes,
+    }).promise;
+  } catch {
+    // Worker loading can fail in some bundling contexts; retry on main thread.
+    pdf = await getDocumentCompat({
+      data: bytes,
+      disableWorker: true,
+    }).promise;
+  }
+
+  const pages: PdfPageText[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const text = content.items
+      .map((item) => {
+        if (!("str" in item)) {
+          return "";
+        }
+
+        const suffix = "hasEOL" in item && item.hasEOL ? "\n" : " ";
+        return `${item.str}${suffix}`;
+      })
+      .join("")
+      .replace(/[ \t]+\n/g, "\n")
+      .trim();
+
+    if (text) {
+      pages.push({
+        page: pageNumber,
+        text,
+      });
+    }
+  }
+
+  return pages;
+};
+
+const getChunkEmbeddings = async (chunkContents: string[]) => {
+  const response = await fetch("/test/embeddings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      chunks: chunkContents,
+    }),
+  });
+  const payload = (await response.json()) as {
+    embeddings?: unknown;
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(payload.error || "Unable to generate chunk embeddings.");
+  }
+
+  if (!Array.isArray(payload.embeddings)) {
+    throw new Error("Invalid embeddings response.");
+  }
+
+  return payload.embeddings.map((entry) =>
+    Array.isArray(entry)
+      ? entry.filter((value): value is number => typeof value === "number")
+      : [],
+  );
 };
 
 export function ClassDetailsHeader({ classId }: ClassDetailsHeaderProps) {
@@ -139,41 +246,74 @@ export function ClassDetailsHeader({ classId }: ClassDetailsHeaderProps) {
   };
 
   const uploadMaterialFile = async (statusKey: string, file: File) => {
-    if (!supabase) {
-      updateUploadStatus(statusKey, "error", "Supabase is unavailable right now.");
-      return;
+    try {
+      if (!supabase) {
+        throw new Error("Supabase is unavailable right now.");
+      }
+
+      if (!user?.id) {
+        throw new Error("Please sign in to upload files.");
+      }
+
+      const materialId = uuidv4();
+      const filepath = `${user.id}/${materialId}/${file.name}`;
+      const { error: insertError } = await supabase.from("materials").insert({
+        id: materialId,
+        class_id: classId,
+        title: file.name,
+        filepath,
+      });
+
+      if (insertError) {
+        throw new Error(insertError.message || "Could not create material record.");
+      }
+
+      const { error: uploadError } = await supabase.storage.from("class_materials").upload(filepath, file, {
+        upsert: false,
+        contentType: file.type || undefined,
+      });
+
+      if (uploadError) {
+        throw new Error(uploadError.message || "Could not upload file.");
+      }
+
+      const isPdf =
+        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
+      if (isPdf) {
+        const pages = await readPdfPages(file);
+        const chunks = await chunkPdfText(pages);
+
+        if (chunks.length === 0) {
+          throw new Error("No extractable text was found in this PDF.");
+        }
+
+        const embeddings = await getChunkEmbeddings(chunks.map((chunk) => chunk.content));
+        const chunksWithEmbeddings = pairChunksWithEmbeddings(chunks, embeddings);
+        const rows = chunksWithEmbeddings.map((chunk) => ({
+          id: uuidv4(),
+          content: chunk.content,
+          index: chunk.chunk_index,
+          vector: chunk.embedding,
+          page_start: chunk.page_start,
+          page_end: chunk.page_end,
+          material_id: materialId,
+        }));
+        const { error: chunkInsertError } = await supabase.from("material_chunks").insert(rows);
+
+        if (chunkInsertError) {
+          throw new Error(chunkInsertError.message || "Could not save PDF chunks.");
+        }
+      }
+
+      updateUploadStatus(statusKey, "success", null);
+    } catch (uploadFlowError) {
+      const message =
+        uploadFlowError instanceof Error
+          ? uploadFlowError.message
+          : "Could not upload file.";
+      updateUploadStatus(statusKey, "error", message);
     }
-
-    if (!user?.id) {
-      updateUploadStatus(statusKey, "error", "Please sign in to upload files.");
-      return;
-    }
-
-    const materialId = uuidv4();
-    const filepath = `${user.id}/${materialId}/${file.name}`;
-    const { error: insertError } = await supabase.from("materials").insert({
-      id: materialId,
-      class_id: classId,
-      title: file.name,
-      filepath,
-    });
-
-    if (insertError) {
-      updateUploadStatus(statusKey, "error", insertError.message || "Could not create material record.");
-      return;
-    }
-
-    const { error: uploadError } = await supabase.storage.from("class_materials").upload(filepath, file, {
-      upsert: false,
-      contentType: file.type || undefined,
-    });
-
-    if (uploadError) {
-      updateUploadStatus(statusKey, "error", uploadError.message || "Could not upload file.");
-      return;
-    }
-
-    updateUploadStatus(statusKey, "success", null);
   };
 
   const handleUploadMaterialSelect = (event: ChangeEvent<HTMLInputElement>) => {

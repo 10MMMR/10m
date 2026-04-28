@@ -7,6 +7,7 @@ import {
   CheckCircleIcon,
   RectangleStackIcon,
   DocumentTextIcon,
+  FolderOpenIcon,
   XCircleIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
@@ -20,6 +21,7 @@ import {
   pairChunksWithEmbeddings,
   type PdfPageText,
 } from "@/lib/pdf-text-chunking";
+import { ClassMaterialsModal } from "./class-materials-modal";
 
 type ClassDetailsHeaderProps = {
   classId: string;
@@ -141,6 +143,8 @@ export function ClassDetailsHeader({ classId }: ClassDetailsHeaderProps) {
   const [className, setClassName] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isMaterialsModalOpen, setIsMaterialsModalOpen] = useState(false);
+  const [materialsRefreshKey, setMaterialsRefreshKey] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadStatusItems, setUploadStatusItems] = useState<UploadStatusItem[]>([]);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -148,6 +152,12 @@ export function ClassDetailsHeader({ classId }: ClassDetailsHeaderProps) {
     {
       label: "Upload material",
       Icon: ArrowUpTrayIcon,
+      action: "upload",
+    },
+    {
+      label: "View materials",
+      Icon: FolderOpenIcon,
+      action: "materials",
     },
     {
       label: "Take notes",
@@ -225,6 +235,10 @@ export function ClassDetailsHeader({ classId }: ClassDetailsHeaderProps) {
     uploadInputRef.current?.click();
   };
 
+  const handleViewMaterialsClick = () => {
+    setIsMaterialsModalOpen(true);
+  };
+
   const updateUploadStatus = (
     key: string,
     status: UploadStatusItem["status"],
@@ -298,6 +312,7 @@ export function ClassDetailsHeader({ classId }: ClassDetailsHeaderProps) {
           page_start: chunk.page_start,
           page_end: chunk.page_end,
           material_id: materialId,
+          class_id: classId,
         }));
         const { error: chunkInsertError } = await supabase.from("material_chunks").insert(rows);
 
@@ -307,6 +322,7 @@ export function ClassDetailsHeader({ classId }: ClassDetailsHeaderProps) {
       }
 
       updateUploadStatus(statusKey, "success", null);
+      setMaterialsRefreshKey((key) => key + 1);
     } catch (uploadFlowError) {
       const message =
         uploadFlowError instanceof Error
@@ -408,13 +424,19 @@ export function ClassDetailsHeader({ classId }: ClassDetailsHeaderProps) {
 
       <section className="space-y-4">
         <h2 className="display-font text-2xl font-bold text-(--text-main)">Quick actions</h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {quickActions.map(({ label, Icon }) => (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {quickActions.map(({ action, label, Icon }) => (
             <button
               key={label}
               type="button"
               className="organic-card flex min-h-12 w-full cursor-pointer items-center gap-3 rounded-2xl px-4 py-6 text-left text-sm font-semibold text-(--text-main) transition-all duration-200 hover:-translate-y-px hover:bg-(--surface-main-faint) hover:shadow-(--shadow-soft)"
-              onClick={label === "Upload material" ? handleUploadMaterialClick : undefined}
+              onClick={
+                action === "upload"
+                  ? handleUploadMaterialClick
+                  : action === "materials"
+                    ? handleViewMaterialsClick
+                    : undefined
+              }
             >
               <Icon className="h-5 w-5 text-(--text-muted)" aria-hidden="true" />
               <span>{label}</span>
@@ -423,6 +445,17 @@ export function ClassDetailsHeader({ classId }: ClassDetailsHeaderProps) {
         </div>
         {uploadError ? <p className="text-sm text-(--destructive)">{uploadError}</p> : null}
       </section>
+
+      {isMaterialsModalOpen ? (
+        <ClassMaterialsModal
+          classId={classId}
+          refreshKey={materialsRefreshKey}
+          onAddMaterial={handleUploadMaterialClick}
+          onClose={() => {
+            setIsMaterialsModalOpen(false);
+          }}
+        />
+      ) : null}
 
       {uploadStatusItems.length > 0 ? (
         <div

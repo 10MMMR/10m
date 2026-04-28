@@ -92,6 +92,12 @@ const POPUP_STUDY_ASSISTANT_SYSTEM_PROMPT = [
   "Do not pretend class materials contain information if the retrieved context does not support it.",
 ].join("\n");
 
+const POPUP_GENERAL_ASSISTANT_SYSTEM_PROMPT = [
+  "You are a helpful AI assistant.",
+  "Use the previous messages from the same chat for conversation continuity.",
+  "Answer from general knowledge without retrieved class material context.",
+].join("\n");
+
 const OPENAI_MODEL = "gpt-4.1-mini";
 
 function getOpenAiApiKey() {
@@ -659,46 +665,6 @@ async function getClassMaterials({
     .filter((material): material is ClassMaterial => material !== null);
 }
 
-async function matchChunksByClassMaterials({
-  classId,
-  matchCount,
-  queryEmbedding,
-  threshold,
-  supabase,
-}: {
-  classId: string;
-  matchCount: number;
-  queryEmbedding: number[];
-  threshold: number;
-  supabase: SupabaseClient;
-}) {
-  const materials = await getClassMaterials({ classId, supabase });
-  const materialIds = materials.map((material) => material.id);
-
-  if (materialIds.length === 0) {
-    return [];
-  }
-
-  const { data, error } = await supabase
-    .from("material_chunks")
-    .select("id, content, material_id, page_start, page_end, vector")
-    .in("material_id", materialIds)
-    .limit(CLASS_CHUNK_SCAN_LIMIT);
-
-  if (error || !Array.isArray(data)) {
-    return [];
-  }
-
-  const chunks = scoreStoredChunkRows({
-    matchCount,
-    queryEmbedding,
-    rows: data,
-    threshold,
-  });
-
-  return withMaterialTitles(chunks, materials);
-}
-
 async function matchMaterialChunks({
   classId,
   matchCount,
@@ -712,38 +678,6 @@ async function matchMaterialChunks({
   threshold: number;
   supabase: SupabaseClient;
 }) {
-  const rpcCandidates = [
-    "match_material_chunks",
-    "match_material_chunks_by_class",
-    "match_class_material_chunks",
-  ];
-
-  for (const fn of rpcCandidates) {
-    const { data, error } = await supabase.rpc(fn, {
-      class_id: classId,
-      match_count: matchCount,
-      query_embedding: queryEmbedding,
-    });
-
-    if (error || !Array.isArray(data)) {
-      continue;
-    }
-
-    const chunks = data
-      .map((row) => toClassChunk((row as Record<string, unknown>) ?? {}))
-      .filter((chunk) => chunk.content.length > 0)
-      .filter((chunk) => chunk.similarity >= threshold)
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, matchCount);
-
-    if (chunks.length > 0) {
-      return withMaterialTitles(
-        chunks,
-        await getClassMaterials({ classId, supabase }),
-      );
-    }
-  }
-
   const chunksByClassColumn = await matchChunksByClassColumn({
     classId,
     matchCount,
@@ -752,20 +686,10 @@ async function matchMaterialChunks({
     supabase,
   });
 
-  if (chunksByClassColumn.length > 0) {
-    return withMaterialTitles(
-      chunksByClassColumn,
-      await getClassMaterials({ classId, supabase }),
-    );
-  }
-
-  return matchChunksByClassMaterials({
-    classId,
-    matchCount,
-    queryEmbedding,
-    threshold,
-    supabase,
-  });
+  return withMaterialTitles(
+    chunksByClassColumn,
+    await getClassMaterials({ classId, supabase }),
+  );
 }
 
 function formatChunkPages(chunk: ClassChunk) {
@@ -983,7 +907,7 @@ async function answerGeneric({
 
   return callOpenAiResponse({
     input: toOpenAiConversationInput(inputMessages),
-    instructions: POPUP_STUDY_ASSISTANT_SYSTEM_PROMPT,
+    instructions: POPUP_GENERAL_ASSISTANT_SYSTEM_PROMPT,
   });
 }
 
@@ -1036,27 +960,38 @@ async function handleChatMessage({
   }
 
   const recentMessages = await getRecentChatMessages({ chatId, supabase, userId });
-  const hasLinkedClass =
-    typeof chatRow.class_id === "string" && chatRow.class_id.trim().length > 0;
-  const intent = await classifyChatIntent({
-    hasLinkedClass,
-    message,
-    recentMessages: recentMessages.slice(0, -1),
-  });
-
+  const priorMessages = recentMessages.slice(0, -1);
+  const linkedClassId = typeof chatRow.class_id === "string"
+    ? chatRow.class_id.trim()
+    : "";
+  const hasLinkedClass = linkedClassId.length > 0;
+  let intent: ChatIntent = "generic_question";
   let assistantText = "";
 
-  if (intent === "small_talk") {
-    assistantText = await answerSmallTalk({ message, recentMessages: recentMessages.slice(0, -1) });
-  } else if (intent === "web_lookup_needed") {
+  if (!hasLinkedClass) {
+    assistantText = await answerGeneric({
+      message,
+      recentMessages: priorMessages,
+    });
+  } else {
+    intent = await classifyChatIntent({
+      hasLinkedClass,
+      message,
+      recentMessages: priorMessages,
+    });
+  }
+
+  if (hasLinkedClass && intent === "small_talk") {
+    assistantText = await answerSmallTalk({ message, recentMessages: priorMessages });
+  } else if (hasLinkedClass && intent === "web_lookup_needed") {
     assistantText = await answerWithWebSearch({
       message,
-      recentMessages: recentMessages.slice(0, -1),
+      recentMessages: priorMessages,
     });
-  } else if (intent === "class_material_question" && hasLinkedClass) {
+  } else if (hasLinkedClass && intent === "class_material_question") {
     const queryEmbedding = await embedUserQuery(message);
     const chunks = await matchMaterialChunks({
-      classId: chatRow.class_id as string,
+      classId: linkedClassId,
       matchCount: CLASS_CHUNK_MATCH_COUNT,
       queryEmbedding,
       threshold: CLASS_CHUNK_SIMILARITY_THRESHOLD,
@@ -1066,7 +1001,7 @@ async function handleChatMessage({
     if (chunks.length === 0) {
       assistantText = await callOpenAiResponse({
         input: toOpenAiConversationInput([
-          ...recentMessages.slice(0, -1),
+          ...priorMessages,
           { content: message, messageIndex: -1, role: "user" as const },
         ]),
         instructions: [
@@ -1079,19 +1014,14 @@ async function handleChatMessage({
       const classAnswer = await answerWithClassMaterials({
         chunks,
         message,
-        recentMessages: recentMessages.slice(0, -1),
+        recentMessages: priorMessages,
       });
-      assistantText = appendClassReferences(classAnswer, chunks, chatRow.class_id as string);
+      assistantText = appendClassReferences(classAnswer, chunks, linkedClassId);
     }
-  } else if (intent === "class_material_question") {
-    assistantText = await answerGeneric({
-      message,
-      recentMessages: recentMessages.slice(0, -1),
-    });
-  } else if (intent === "unclear") {
+  } else if (hasLinkedClass && intent === "unclear") {
     assistantText = await callOpenAiResponse({
       input: toOpenAiConversationInput([
-        ...recentMessages.slice(0, -1),
+        ...priorMessages,
         { content: message, messageIndex: -1, role: "user" as const },
       ]),
       instructions: [
@@ -1100,10 +1030,10 @@ async function handleChatMessage({
         "If you can still safely answer generally, do so briefly without class material lookup.",
       ].join("\n\n"),
     });
-  } else {
+  } else if (hasLinkedClass) {
     assistantText = await answerGeneric({
       message,
-      recentMessages: recentMessages.slice(0, -1),
+      recentMessages: priorMessages,
     });
   }
 
